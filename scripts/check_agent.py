@@ -5,11 +5,13 @@ Run inside Compose with the source tree mounted at /checks. Never sends Telegram
 
 import asyncio
 import json
+import re
 
 from editorial_bot.agent.core import Agent, AgentRequest
 from editorial_bot.agent.prompts import PromptBuilder
 from editorial_bot.agent.tools.base import ToolRegistry
 from editorial_bot.agent.tools.editorial import EditorialTools
+from editorial_bot.agent.tools.reaction_tools import build_reaction_tools
 from editorial_bot.agent.tools.search_tools import build_search_tools
 from editorial_bot.logging_setup import configure
 from editorial_bot.services.gitlab import GitLab
@@ -32,6 +34,7 @@ READ_TOOLS = {
     "read_wiki_document",
     "memory_list",
     "web_search",
+    "react_heart",
 }
 
 
@@ -48,7 +51,7 @@ async def main():
             gl, google, roster, knowledge, CardWorkflow(gl, google, store, settings), store, settings
         )
         attempted_writes = []
-        tools = editorial.build() + build_search_tools(build_web_search_service(settings))
+        tools = editorial.build() + build_search_tools(build_web_search_service(settings)) + build_reaction_tools()
         for tool in tools:
             if tool.name not in READ_TOOLS:
 
@@ -87,8 +90,22 @@ async def main():
         )
         assert "gitlab_list_labels" in (status.detail or {}).get("tools", []), "狀態回答未查詢實際標籤"
         assert date.status == "clarify", "相對日期未補問"
+        for result in (status, date):
+            assert not re.search(
+                r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)|`|\*\*|\[[^\]]+\]\([^)]+\)|</?[A-Za-z][^>]*>", result.reply
+            ), "回覆包含 Markdown 或 HTML 語法"
         assert not attempted_writes, f"意外要求寫入工具：{attempted_writes}"
-        print(json.dumps({"live_label_tool_call": True, "relative_date_asks_user": True, "remote_writes": 0}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "live_label_tool_call": True,
+                    "relative_date_asks_user": True,
+                    "plain_text_replies": True,
+                    "remote_writes": 0,
+                },
+                indent=2,
+            )
+        )
     finally:
         await gl.close()
         await store.close()

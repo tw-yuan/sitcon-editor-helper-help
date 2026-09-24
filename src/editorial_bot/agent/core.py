@@ -371,7 +371,7 @@ class Agent:
         question = str(args.get("question", "請問你的意思是？"))
         options = args.get("options") or []
         lines = [question]
-        lines += [f"{i}. {opt}" for i, opt in enumerate(options, start=1)]
+        lines += [f"選項 {i}：{opt}" for i, opt in enumerate(options, start=1)]
         lines.append("（請直接回覆本則訊息作答）")  # 純 reply-chain：回覆問句才會續接
         return "\n".join(lines)
 

@@ -105,6 +105,12 @@ Wiki 首頁含較舊的人員區段，知識服務會移除該段，提示改查
 
 批次 review 會先辨識全部目標，若某張標題模糊、已關閉、文案卡缺連結，則在寫入前回報。接著逐卡切換狀態、讀回、保存通知內容，再由 Telegram gateway 發送。通知列卡號、卡名、作者、總副召、文案／資料夾／Issue 連結。單張 API 失敗不會把全部卡片說成成功。舊卡可從 description 取連結，不會自動幫舊卡建資料夾。
 
+## 回覆格式
+
+系統 prompt 明確要求一般回覆、補問與候選文字使用純文字：不輸出 Markdown 標題、清單、粗體、表格、程式碼區塊、格式化連結，也不輸出 HTML 標籤或實體編碼。使用句子與換行整理資訊，URL 直接列出。從 Wiki 或搜尋取得的格式化文字須轉述成純文字。
+
+Agent 文字原本即以 `parse_mode=None` 發送；補問選項改用「選項 1：」避免產生 Markdown 編號清單。`check_agent.py` 的真實模型唯讀驗收同時檢查一般回覆與補問是否出現常見 Markdown／HTML 語法。工具本身仍使用 JSON schema，系統產生的 Telegram 身分標註保留必要的 Telegram 格式。
+
 ## Reaction 與 typing
 
 依年度 bot 的互動方式，收到授權且未重複的業務訊息先加 👀，同時在原 topic 每 4 秒更新 typing。提示包在處理鎖與 agent 名額外，排隊時也看得到；結束或取消時取消並等待背景工作清理。`/reload` 也有進度提示。
@@ -190,7 +196,7 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 - 76 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
 - Google、GitLab、Telegram 的 Compose 唯讀預檢通過；沒有執行真實建卡、建檔或群組通知測試。
-- 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問通過，驗收腳本在工具邊界封鎖寫入。
+- 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問及純文字回覆檢查通過，驗收腳本在工具邊界封鎖寫入。
 - 最終正式映像 pip-audit 未發現已知套件弱點；交付檔案未包含實際 token 或 API key。
 - 使用者已停用舊 n8n，唯讀確認 webhook 已解除，當時尚有 3 筆待處理 Telegram updates。
 - 使用者已明確授權啟動並處理 pending updates；`docker compose up --build -d bot` 成功，log 顯示 `Editorial bot ready` 與 `Application started`。初次檢查容器 running、restart count 0、兩版 migration 已套用；授權群組初始為 0，待管理員在群組 `/authorize`。
