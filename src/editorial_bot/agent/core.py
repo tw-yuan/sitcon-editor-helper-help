@@ -36,13 +36,19 @@ ASK_USER_SPEC = ToolSpec(
     description=(
         "當指令歧義導致無法執行時（模糊比對命中多筆、人名對到多人、會議類型無法判斷等），"
         "向使用者提出單一問題並列出候選讓其選擇。呼叫後即結束本輪，等待使用者回覆。請單獨使用，"
-        "不要與其他工具同時呼叫。"
+        "不要與其他工具同時呼叫。候選 options 會顯示為可點擊按鈕；需要取得使用者同意時，"
+        "options 使用同意、不同意兩項。指令完整就直接執行，不要額外要求同意。"
     ),
     input_schema={
         "type": "object",
         "properties": {
             "question": {"type": "string", "description": "要問使用者的單一問題"},
-            "options": {"type": "array", "items": {"type": "string"}, "description": "候選項（可選）"},
+            "options": {
+                "type": "array",
+                "items": {"type": "string"},
+                "maxItems": 10,
+                "description": "候選項（可選）；確認操作時使用 [同意, 不同意]",
+            },
         },
         "required": ["question"],
     },
@@ -327,9 +333,15 @@ class Agent:
             if ask is not None:
                 others = [tc for tc in resp.tool_calls if tc.id != ask.id]
                 resolved = [ToolResultBlock(tc.id, "因本輪需補問，此工具未執行；收到回答後再呼叫。") for tc in others]
+                raw_options = ask.arguments.get("options")
+                options = (
+                    [o.strip() for o in raw_options if isinstance(o, str) and o.strip()][:10]
+                    if isinstance(raw_options, list)
+                    else []
+                )
                 return _Outcome(
-                    reply=self._format_question(ask.arguments),
-                    pending=Pending(messages=messages, resolved_results=resolved, ask_user_id=ask.id),
+                    reply=self._format_question({**ask.arguments, "options": options}),
+                    pending=Pending(messages=messages, resolved_results=resolved, ask_user_id=ask.id, options=options),
                     tool_actions=actions,
                 )
 
@@ -372,7 +384,7 @@ class Agent:
         options = args.get("options") or []
         lines = [question]
         lines += [f"選項 {i}：{opt}" for i, opt in enumerate(options, start=1)]
-        lines.append("（請直接回覆本則訊息作答）")  # 純 reply-chain：回覆問句才會續接
+        lines.append("（請點選下方按鈕，或直接回覆本則訊息作答）" if options else "（請直接回覆本則訊息作答）")
         return "\n".join(lines)
 
 

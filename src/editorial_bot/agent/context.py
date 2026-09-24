@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..services.llm.base import Message, TextBlock, ToolResultBlock, ToolUseBlock
 
@@ -34,6 +34,7 @@ class Pending:
     messages: list[Message]
     resolved_results: list[ToolResultBlock]
     ask_user_id: str
+    options: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)

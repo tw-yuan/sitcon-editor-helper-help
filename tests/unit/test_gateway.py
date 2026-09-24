@@ -157,3 +157,141 @@ async def test_tag_all_shows_progress_without_reacting_to_bot_menu(gateway, butt
         incoming.callback_query.answer.assert_awaited_once()
     else:
         assert [c.kwargs["reaction"][0].emoji for c in bot.set_message_reaction.call_args_list] == ["👀", "👍"]
+
+
+async def issue_question(gateway, options):
+    from editorial_bot.agent.context import Pending
+    from editorial_bot.agent.core import AgentResult
+
+    await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    bot = feedback_bot()
+    bot.edit_message_reply_markup = AsyncMock()
+    pending = Pending([], [], "ask", options=options)
+    result = AgentResult("請選擇\n" + "\n".join(options), status="clarify", pending=pending)
+    gateway.agent.handle.return_value = result
+    await gateway.handle(update(), SimpleNamespace(bot=bot))
+    sent = bot.send_message.call_args.kwargs
+    assert sent["parse_mode"] is None
+    menu = SimpleNamespace(
+        message_id=456,
+        message_thread_id=55,
+        text=sent["text"],
+        caption=None,
+        reply_markup=sent["reply_markup"],
+        from_user=SimpleNamespace(id=99),
+        reply_to_message=None,
+    )
+    gateway.agent.handle.reset_mock()
+    gateway.agent.handle.return_value = AgentResult("已收到答案")
+    bot.send_message.return_value = SimpleNamespace(message_id=457)
+    return bot, pending, menu
+
+
+def choose_update(menu, index=0, user=8):
+    incoming = update(user=user)
+    incoming.update_id = 10
+    incoming.effective_message = menu
+    incoming.callback_query = SimpleNamespace(
+        data=menu.reply_markup.inline_keyboard[0][index].callback_data, answer=AsyncMock()
+    )
+    return incoming
+
+
+async def test_choice_button_resumes_original_question_once(gateway):
+    bot, pending, menu = await issue_question(gateway, ["卡片 A", "卡片 B", "卡片 C"])
+    assert [b.text for b in menu.reply_markup.inline_keyboard[0]] == ["1", "2", "3"]
+    incoming = choose_update(menu, 1)
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    request = gateway.agent.handle.call_args.args[0]
+    assert request.resume is pending and request.text == "卡片 B"
+    assert request.thread_id == 55 and request.user_id == 8
+    bot.edit_message_reply_markup.assert_awaited_once_with(chat_id=-1, message_id=456, reply_markup=None)
+    incoming.update_id = 11
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    gateway.agent.handle.assert_awaited_once()
+    assert "已回答" in incoming.callback_query.answer.call_args.kwargs["text"]
+
+
+@pytest.mark.parametrize("invalid", ["user", "chat", "thread", "message", "expired", "restart", "forged", "revoked"])
+async def test_invalid_choices_never_resume_or_consume(gateway, invalid):
+    from editorial_bot.questions import Questions
+
+    bot, _pending, menu = await issue_question(gateway, ["同意", "不同意"])
+    incoming = choose_update(menu)
+    if invalid == "user":
+        incoming.effective_user.id = 99
+    elif invalid == "chat":
+        await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-2,7)")
+        incoming.effective_chat.id = -2
+    elif invalid == "thread":
+        menu.message_thread_id = 56
+    elif invalid == "message":
+        menu.message_id = 999
+    elif invalid == "expired":
+        gateway.questions.ttl = 0
+    elif invalid == "restart":
+        gateway.questions = Questions(1800)
+    elif invalid == "forged":
+        incoming.callback_query.data = incoming.callback_query.data.rsplit(":", 1)[0] + ":99"
+    elif invalid == "revoked":
+        await gateway.store.execute("DELETE FROM authorized_groups")
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    gateway.agent.handle.assert_not_awaited()
+    bot.edit_message_reply_markup.assert_not_awaited()
+    assert not any(q.used for q in gateway.questions.entries.values())
+
+
+@pytest.mark.parametrize("button", [True, False])
+@pytest.mark.parametrize("agree", [True, False])
+async def test_consent_and_refusal_are_enforced(gateway, button, agree):
+    bot, pending, menu = await issue_question(gateway, ["同意", "不同意"])
+    assert [b.text for b in menu.reply_markup.inline_keyboard[0]] == ["同意", "不同意"]
+    if button:
+        incoming = choose_update(menu, 0 if agree else 1)
+    else:
+        incoming = update(text="1" if agree else "2")
+        incoming.update_id = 10
+        incoming.effective_message.reply_to_message = menu
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    if agree:
+        gateway.agent.handle.assert_awaited_once()
+        assert gateway.agent.handle.call_args.args[0].resume is pending
+        assert gateway.agent.handle.call_args.args[0].text == "同意"
+    else:
+        gateway.agent.handle.assert_not_awaited()
+        assert "已取消" in bot.send_message.call_args.kwargs["text"]
+        assert (await gateway.store.one("SELECT action FROM audit_log ORDER BY id DESC LIMIT 1"))["action"] == "cancel"
+    stale = update(text="同意") if button else choose_update(menu)
+    stale.update_id = 11
+    if button:
+        stale.effective_message.reply_to_message = menu
+    await gateway.handle(stale, SimpleNamespace(bot=bot))
+    assert gateway.agent.handle.await_count == int(agree)
+
+
+async def test_callback_ack_and_keyboard_failure_do_not_drop_answer(gateway):
+    bot, _pending, menu = await issue_question(gateway, ["甲", "乙"])
+    incoming = choose_update(menu)
+    incoming.callback_query.answer.side_effect = TimedOut()
+    bot.edit_message_reply_markup.side_effect = TimedOut()
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    gateway.agent.handle.assert_awaited_once()
+    assert gateway.agent.handle.call_args.args[0].text == "甲"
+
+
+async def test_deferred_question_delivery_still_supports_buttons_and_text(gateway):
+    from editorial_bot.agent.context import Pending
+    from editorial_bot.agent.core import AgentResult
+
+    await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    result = AgentResult("請選擇", status="clarify", pending=Pending([], [], "ask", options=["甲", "乙"]))
+    entry = gateway.questions.add(result, -1, 55, 8)
+    await gateway.stage("event", -1, 55, 123, [("第一段", None), ("請選擇", None)], question_token=entry.token)
+    bot = feedback_bot()
+    bot.send_message.side_effect = [SimpleNamespace(message_id=455), SimpleNamespace(message_id=456)]
+    await gateway.deliver(bot)
+    first, last = bot.send_message.call_args_list
+    assert first.kwargs["reply_markup"] is None
+    markup = last.kwargs["reply_markup"]
+    assert gateway.conversation(-1, 456, 8, 55) is result
+    assert gateway.questions.choose(markup.inline_keyboard[0][1].callback_data, -1, 55, 8, 456).text == "乙"

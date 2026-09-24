@@ -7,7 +7,7 @@ import re
 import time
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
-from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError
 
 from .agent.context import trim_history
 from .agent.core import AgentRequest, AgentResult
@@ -15,6 +15,7 @@ from .agent.tools.base import ToolContext
 from .agent.tools.editorial import Empty
 from .feedback import REACT_DONE, progress, set_reaction
 from .logging_setup import redact
+from .questions import Questions
 
 log = logging.getLogger(__name__)
 HELP = """我是編輯組小石。可以 @我、叫「小石」，或回覆我的訊息。
@@ -63,6 +64,7 @@ class Gateway:
         self.editorial, self.roster, self.knowledge = editorial, roster, knowledge
         self.retry_at = 0.0
         self.sessions = {}
+        self.questions = Questions(getattr(settings, "context_ttl_seconds", 1800))
         self.locks = {}
         self.semaphore = asyncio.Semaphore(settings.max_concurrent_agent_turns)
 
@@ -72,7 +74,16 @@ class Gateway:
         )
 
     async def stage(
-        self, event, chat, thread, reply_to, messages, *, completion_reaction=None, reaction_message_id=None
+        self,
+        event,
+        chat,
+        thread,
+        reply_to,
+        messages,
+        *,
+        completion_reaction=None,
+        reaction_message_id=None,
+        question_token=None,
     ):
         async with self.store.lock:
             try:
@@ -93,6 +104,7 @@ class Gateway:
                                     "parse_mode": mode,
                                     "completion_reaction": completion_reaction,
                                     "reaction_message_id": reaction_message_id,
+                                    "question_token": question_token if ordinal == len(messages) - 1 else None,
                                 },
                                 ensure_ascii=False,
                             ),
@@ -136,6 +148,7 @@ class Gateway:
                     text=body["text"],
                     parse_mode=body["parse_mode"],
                     disable_web_page_preview=True,
+                    reply_markup=self.questions.markup(body.get("question_token")),
                 )
             except RetryAfter as exc:
                 delay = exc.retry_after
@@ -154,6 +167,14 @@ class Gateway:
                     "UPDATE outbox SET state='sent',telegram_message_id=? WHERE id=?", (message.message_id, row["id"])
                 )
                 sent.append(message.message_id)
+                if question := self.questions.get(body.get("question_token")):
+                    self.questions.bind(question.token, message.message_id)
+                    self.sessions[(row["chat_id"], message.message_id)] = (
+                        time.monotonic(),
+                        question.user_id,
+                        question.thread_id,
+                        question.result,
+                    )
                 if body.get("completion_reaction") and body.get("reaction_message_id") is not None:
                     remaining = await self.store.one(
                         "SELECT 1 FROM outbox WHERE event_id=? AND state!='sent' LIMIT 1", (row["event_id"],)
@@ -194,6 +215,20 @@ class Gateway:
             return entry[3]
         return None
 
+    async def clear_buttons(self, bot, chat_id, message_id):
+        try:
+            await bot.edit_message_reply_markup(chat_id=chat_id, message_id=message_id, reply_markup=None)
+        except TelegramError as exc:
+            log.debug(
+                "Could not clear answered buttons chat=%s message=%s type=%s", chat_id, message_id, type(exc).__name__
+            )
+
+    async def answer_callback(self, callback, text=None, *, alert=False):
+        try:
+            await callback.answer(text=text, show_alert=alert)
+        except TelegramError as exc:
+            log.debug("Callback acknowledgement failed type=%s", type(exc).__name__)
+
     async def handle(self, update, context):
         message, chat, user = update.effective_message, update.effective_chat, update.effective_user
         if not message or not chat or not user or user.is_bot:
@@ -201,7 +236,7 @@ class Gateway:
         text = message.text or message.caption or ""
         callback = update.callback_query
         bot_username = context.bot.username
-        command_match = re.match(r"^/(\w+)(?:@([A-Za-z0-9_]+))?(?:\s|$)", text)
+        command_match = None if callback else re.match(r"^/(\w+)(?:@([A-Za-z0-9_]+))?(?:\s|$)", text)
         if command_match and command_match[2] and command_match[2].casefold() != bot_username.casefold():
             return
         command = command_match[1].lower() if command_match else ""
@@ -215,14 +250,31 @@ class Gateway:
             return
         if not await self.allowed(chat):
             return
+        choice = None
         if callback:
-            if callback.data != "mention_editors":
+            if (callback.data or "").startswith("choose:"):
+                try:
+                    choice = self.questions.choose(
+                        callback.data, chat.id, message.message_thread_id, user.id, message.message_id
+                    )
+                except ValueError as exc:
+                    await self.answer_callback(callback, str(exc), alert=True)
+                    return
+                text = choice.text
+                await self.answer_callback(callback, "已收到選擇")
+                await self.clear_buttons(context.bot, chat.id, message.message_id)
+            elif callback.data == "mention_editors":
+                await self.answer_callback(callback)
+                command = "ta"
+            else:
                 return
-            await callback.answer()
-            command = "ta"
         reply = message.reply_to_message
         reply_to_bot = bool(reply and reply.from_user and reply.from_user.id == context.bot.id)
-        if not command and not triggered(text, bot_username, self.settings.bot_trigger_name, reply_to_bot):
+        if (
+            not command
+            and choice is None
+            and not triggered(text, bot_username, self.settings.bot_trigger_name, reply_to_bot)
+        ):
             return
         if command in ("revoke", "reload", "resend") and not admin:
             await message.reply_text("這個指令限設定的管理員使用。")
@@ -275,11 +327,35 @@ class Gateway:
             self.locks.setdefault((chat.id, thread, user.id), asyncio.Lock()),
             self.semaphore,
         ):
-            previous = self.conversation(chat.id, reply.message_id, user.id, thread) if reply_to_bot else None
-            if previous and previous.pending:
+            previous = (
+                choice.entry.result
+                if choice
+                else (self.conversation(chat.id, reply.message_id, user.id, thread) if reply_to_bot else None)
+            )
+            answer_error = None
+            if not callback and reply_to_bot:
+                if previous and previous.pending and previous.pending.options:
+                    try:
+                        choice = self.questions.answer_text(previous.pending, text, chat.id, thread, user.id)
+                        text = choice.text
+                        await self.clear_buttons(context.bot, chat.id, reply.message_id)
+                    except ValueError as exc:
+                        answer_error = str(exc)
+                elif not previous and getattr(reply, "reply_markup", None):
+                    if any(
+                        (button.callback_data or "").startswith("choose:")
+                        for row in reply.reply_markup.inline_keyboard
+                        for button in row
+                    ):
+                        answer_error = "這個問題已過期或不屬於你，請重新提出需求。"
+            if previous and previous.pending and not previous.pending.options:
                 self.sessions.pop((chat.id, reply.message_id), None)
             try:
-                if command == "ta":
+                if answer_error:
+                    result = AgentResult(answer_error, status="error")
+                elif choice and choice.declined:
+                    result = AgentResult("已取消，本次不執行操作。", action="cancel")
+                elif command == "ta":
                     ctx = ToolContext(chat.id, thread, user.id, user.username, text, event_id=event)
                     await self.editorial.tag(Empty(), ctx)
                     result = AgentResult("", notices=ctx.notices, action="mention_editors")
@@ -312,6 +388,11 @@ class Gateway:
                 completion_reaction = result.reaction or REACT_DONE
             elif result.status == "clarify":
                 completion_reaction = result.reaction
+            question = (
+                self.questions.add(result, chat.id, thread, user.id)
+                if result.pending and result.pending.options
+                else None
+            )
             await self.stage(
                 event,
                 chat.id,
@@ -320,6 +401,7 @@ class Gateway:
                 messages,
                 completion_reaction=completion_reaction,
                 reaction_message_id=reaction_message_id,
+                question_token=question.token if question else None,
             )
             await self.store.execute(
                 "INSERT INTO audit_log(chat_id,user_id,action,status,detail) VALUES (?,?,?,?,?)",

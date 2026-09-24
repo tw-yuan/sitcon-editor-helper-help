@@ -72,8 +72,18 @@ Wiki 首頁含較舊的人員區段，知識服務會移除該段，提示改查
 - 私訊、未授權群組、其他 bot 的訊息不執行 agent；未授權群組允許設定的管理員 `/authorize`。
 - 觸發方式：`@bot`、文字含「小石」、訊息開頭 `review`、回覆 bot。一般提到 review 的聊天不觸發。
 - 通知回原群組與 topic，不另外私訊被標註者。
-- 補問與 transcript 只由同群、同 topic、同操作者的 reply chain 續接。TTL 預設 30 分鐘，重啟後失效；長期記憶不失效。
+- 補問可點選原問題的按鈕或以 reply chain 回答；transcript 仍沿 reply chain 續接。只限同群、同 topic、同操作者。TTL 預設 30 分鐘，重啟後失效；長期記憶不失效。
 - 補問工具與其他工具同輪出現時，其他工具一律不執行，避免資訊尚未完整就先寫入。
+
+## 補問按鈕與確認
+
+Agent 的 ask_user.options 會保存在 Pending，最多十個候選。問題本體仍為純文字「選項 1：…」，Telegram inline keyboard 每列最多三個數字按鈕；使用者點擊後，系統把完整候選文字填回原 ask_user 的工具結果，讓 agent 接續原需求。直接回覆編號也會換成對應候選文字；自由文字仍可作答。
+
+確實需要同意的問題使用「同意」、「不同意」兩個候選，按鈕直接顯示這兩個標籤。不同意在 gateway 直接取消，不會呼叫模型或業務工具。明確且資訊完整的指令照常執行，不增加通用確認關卡。
+
+questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic、問題 message_id 與原對話，最多 500 筆並套用 CONTEXT_TTL_SECONDS。Callback 只攜帶識別碼及選項索引，沒有可任意指定的工具或操作參數；每次回呼先驗群組授權，再檢查歸屬、期限和索引。按鈕與文字共用一次性狀態，同一題無法重複續接。作答後盡力移除按鈕；Telegram 確認回呼／移除鍵盤失敗不會丟掉已接受的答案，重按仍會被拒絕。
+
+訊息 outbox 的 JSON body 只記錄問題識別碼，鍵盤放在問題最後一段；延遲送達後仍綁定實際送達的 message_id，支援文字及按鈕作答，不需資料庫 migration。重啟或過期後識別碼無效，舊按鈕會提示重新提出需求。既有歷史訊息不會補上按鈕。
 
 ## 開卡資料流
 
@@ -194,9 +204,9 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 ## 本次交付驗證
 
-- 76 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
+- 108 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
 - Google、GitLab、Telegram 的 Compose 唯讀預檢通過；沒有執行真實建卡、建檔或群組通知測試。
-- 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問及純文字回覆檢查通過，驗收腳本在工具邊界封鎖寫入。
+- 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問、同意按鈕候選、純文字回覆及 MMDD 開卡參數解析檢查通過，驗收腳本在工具邊界封鎖寫入。
 - 最終正式映像 pip-audit 未發現已知套件弱點；交付檔案未包含實際 token 或 API key。
 - 使用者已停用舊 n8n，唯讀確認 webhook 已解除，當時尚有 3 筆待處理 Telegram updates。
 - 使用者已明確授權啟動並處理 pending updates；`docker compose up --build -d bot` 成功，log 顯示 `Editorial bot ready` 與 `Application started`。初次檢查容器 running、restart count 0、兩版 migration 已套用；授權群組初始為 0，待管理員在群組 `/authorize`。

@@ -91,9 +91,22 @@ async def main():
                 event_id="check-date",
             )
         )
+        consent = await agent.handle(
+            AgentRequest(
+                -1,
+                None,
+                settings.telegram_admin_id,
+                None,
+                "小石，請先問我是否同意把本群偏好記為『文案開頭要放重點』，取得我同意後才保存。",
+                event_id="check-consent",
+            )
+        )
+        assert consent.status == "clarify" and consent.pending.options == ["同意", "不同意"], (
+            "同意問題未提供正確按鈕選項"
+        )
         assert "gitlab_list_labels" in (status.detail or {}).get("tools", []), "狀態回答未查詢實際標籤"
         assert date.status == "clarify", "相對日期未補問"
-        for result in (status, date):
+        for result in (status, date, consent):
             assert not re.search(
                 r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)|`|\*\*|\[[^\]]+\]\([^)]+\)|</?[A-Za-z][^>]*>", result.reply
             ), "回覆包含 Markdown 或 HTML 語法"
@@ -117,6 +130,7 @@ async def main():
                     "live_label_tool_call": True,
                     "relative_date_asks_user": True,
                     "compact_date_and_title": True,
+                    "consent_button_options": True,
                     "plain_text_replies": True,
                     "remote_writes": 0,
                 },
