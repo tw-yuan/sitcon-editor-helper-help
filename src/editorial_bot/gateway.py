@@ -13,6 +13,7 @@ from .agent.context import trim_history
 from .agent.core import AgentRequest, AgentResult
 from .agent.tools.base import ToolContext
 from .agent.tools.editorial import Empty
+from .feedback import REACT_DONE, progress, set_reaction
 from .logging_setup import redact
 
 log = logging.getLogger(__name__)
@@ -70,7 +71,9 @@ class Gateway:
             await self.store.one("SELECT 1 FROM authorized_groups WHERE chat_id=?", (chat.id,))
         )
 
-    async def stage(self, event, chat, thread, reply_to, messages):
+    async def stage(
+        self, event, chat, thread, reply_to, messages, *, completion_reaction=None, reaction_message_id=None
+    ):
         async with self.store.lock:
             try:
                 await self.store.conn.execute("BEGIN IMMEDIATE")
@@ -84,7 +87,15 @@ class Gateway:
                             chat,
                             thread,
                             reply_to,
-                            json.dumps({"text": text, "parse_mode": mode}, ensure_ascii=False),
+                            json.dumps(
+                                {
+                                    "text": text,
+                                    "parse_mode": mode,
+                                    "completion_reaction": completion_reaction,
+                                    "reaction_message_id": reaction_message_id,
+                                },
+                                ensure_ascii=False,
+                            ),
                         ),
                     )
                 await self.store.conn.execute(
@@ -143,6 +154,14 @@ class Gateway:
                     "UPDATE outbox SET state='sent',telegram_message_id=? WHERE id=?", (message.message_id, row["id"])
                 )
                 sent.append(message.message_id)
+                if body.get("completion_reaction") and body.get("reaction_message_id") is not None:
+                    remaining = await self.store.one(
+                        "SELECT 1 FROM outbox WHERE event_id=? AND state!='sent' LIMIT 1", (row["event_id"],)
+                    )
+                    if remaining is None:
+                        await set_reaction(
+                            bot, row["chat_id"], body["reaction_message_id"], body["completion_reaction"]
+                        )
         return sent
 
     async def recover(self, bot):
@@ -213,9 +232,11 @@ class Gateway:
             await message.reply_text("已撤銷本群授權。")
             return
         if command == "reload":
-            await self.roster.reload()
-            await self.knowledge.refresh(force=True)
-            await message.reply_text("名冊及 Wiki 快取已更新。")
+            async with progress(context.bot, chat.id, message.message_thread_id, message.message_id):
+                await self.roster.reload()
+                await self.knowledge.refresh(force=True)
+                await message.reply_text("名冊及 Wiki 快取已更新。")
+            await set_reaction(context.bot, chat.id, message.message_id, REACT_DONE)
             return
         if command in ("help", "start"):
             await message.reply_text(
@@ -245,10 +266,15 @@ class Gateway:
             return
         event = f"telegram:{update.update_id}"
         thread = message.message_thread_id
-        async with self.locks.setdefault((chat.id, thread, user.id), asyncio.Lock()), self.semaphore:
-            if not await self.store.claim_event(event, chat.id, thread, user.id, message.message_id):
-                return
-
+        if not await self.store.claim_event(event, chat.id, thread, user.id, message.message_id):
+            return
+        # Feedback starts while queued; callbacks have no new user message to react to.
+        reaction_message_id = None if callback else message.message_id
+        async with (
+            progress(context.bot, chat.id, thread, reaction_message_id),
+            self.locks.setdefault((chat.id, thread, user.id), asyncio.Lock()),
+            self.semaphore,
+        ):
             previous = self.conversation(chat.id, reply.message_id, user.id, thread) if reply_to_bot else None
             if previous and previous.pending:
                 self.sessions.pop((chat.id, reply.message_id), None)
@@ -281,7 +307,20 @@ class Gateway:
             notices = list(dict.fromkeys([*result.notices, *[json.loads(r["result"])["notification"] for r in rows]]))
             messages = [(notice, "HTML") for notice in notices]
             messages.extend((chunk, None) for chunk in split_plain(redact(result.reply)))
-            await self.stage(event, chat.id, thread, message.message_id, messages)
+            completion_reaction = None
+            if result.status == "ok":
+                completion_reaction = result.reaction or REACT_DONE
+            elif result.status == "clarify":
+                completion_reaction = result.reaction
+            await self.stage(
+                event,
+                chat.id,
+                thread,
+                message.message_id,
+                messages,
+                completion_reaction=completion_reaction,
+                reaction_message_id=reaction_message_id,
+            )
             await self.store.execute(
                 "INSERT INTO audit_log(chat_id,user_id,action,status,detail) VALUES (?,?,?,?,?)",
                 (chat.id, user.id, result.action, result.status, json.dumps(result.detail, ensure_ascii=False)),

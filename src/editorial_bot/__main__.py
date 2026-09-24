@@ -13,6 +13,7 @@ from .agent.core import Agent
 from .agent.prompts import PromptBuilder
 from .agent.tools.base import ToolRegistry
 from .agent.tools.editorial import EditorialTools
+from .agent.tools.reaction_tools import build_reaction_tools
 from .agent.tools.search_tools import build_search_tools
 from .gateway import Gateway
 from .logging_setup import configure, redact
@@ -113,7 +114,7 @@ def run(settings):
             raise ValueError("此部署需要 WEB_SEARCH_API_KEY 與網路搜尋設定")
         agent = Agent(
             build_llm_client(settings),
-            ToolRegistry(editorial.build() + build_search_tools(search)),
+            ToolRegistry(editorial.build() + build_search_tools(search) + build_reaction_tools()),
             PromptBuilder(settings, store),
             roster,
             thinking=settings.llm_thinking,

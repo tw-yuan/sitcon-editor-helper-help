@@ -105,6 +105,16 @@ Wiki 首頁含較舊的人員區段，知識服務會移除該段，提示改查
 
 批次 review 會先辨識全部目標，若某張標題模糊、已關閉、文案卡缺連結，則在寫入前回報。接著逐卡切換狀態、讀回、保存通知內容，再由 Telegram gateway 發送。通知列卡號、卡名、作者、總副召、文案／資料夾／Issue 連結。單張 API 失敗不會把全部卡片說成成功。舊卡可從 description 取連結，不會自動幫舊卡建資料夾。
 
+## Reaction 與 typing
+
+依年度 bot 的互動方式，收到授權且未重複的業務訊息先加 👀，同時在原 topic 每 4 秒更新 typing。提示包在處理鎖與 agent 名額外，排隊時也看得到；結束或取消時取消並等待背景工作清理。`/reload` 也有進度提示。
+
+完成回覆的 reaction 為 👍，模型可透過 `react_heart` 選擇 ❤。採 👍 是因 [Telegram 官方 reaction 清單](https://core.telegram.org/bots/api#reactiontypeemoji)不含參考程式的 ✅。補問預設保留 👀；程式錯誤或訊息尚未全部送達時，不標示完成。
+
+完成 reaction 與觸發訊息 ID 存在 outbox 的 JSON 內。只有該事件的所有訊息都已確認送達才更新；延後送出或人工重送同樣遵守此規則。舊 outbox 沒有這些欄位也能正常送出，不需 schema migration。
+
+提示是獨立的附加功能：API 有 3 秒時間限制，失敗記錄 DEBUG、不影響業務結果；typing 遵守 Retry-After，遇到沒有權限或不支援的請求時停止。未授權訊息沒有提示。按鈕會顯示 typing，但不對 bot 的選單訊息加 reaction。
+
 ## 通知與重新啟動
 
 通知內容與原群／topic 先寫入 outbox，再送 Telegram。送出前狀態改為 `sending`，取得 message ID 才改 `sent`。
@@ -137,6 +147,7 @@ Wiki 首頁含較舊的人員區段，知識服務會移除該段，提示改查
 | search_wiki／read_wiki_page／read_wiki_document | 查 Wiki 與 Wiki 連結的 Google Docs。 |
 | memory_list／memory_remember／memory_forget | 本群持久記憶，上限 30 筆、每筆 500 字。 |
 | web_search | 獨立模型的公開網路搜尋與來源。 |
+| react_heart | 選擇在本輪回覆送達後，對觸發訊息按 ❤；不能指定其他訊息。 |
 | ask_user | 缺資訊時結束本輪並補問。 |
 
 不提供 label 定義的新增、修改、刪除，不提供刪卡、任意 HTTP、Shell、任意 Drive 寫入工具。GitLab description／留言中的 quick action 會跳脫，避免繞過工具限制。
@@ -177,7 +188,7 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 ## 本次交付驗證
 
-- 60 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
+- 76 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
 - Google、GitLab、Telegram 的 Compose 唯讀預檢通過；沒有執行真實建卡、建檔或群組通知測試。
 - 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問通過，驗收腳本在工具邊界封鎖寫入。
 - 最終正式映像 pip-audit 未發現已知套件弱點；交付檔案未包含實際 token 或 API key。
