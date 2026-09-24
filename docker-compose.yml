@@ -1,0 +1,27 @@
+services:
+  bot:
+    build:
+      context: .
+      target: base
+    image: sitcon-editorial-bot:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      GOOGLE_SA_JSON_PATH: /run/secrets/google-sa.json
+      DB_PATH: /data/editorial.sqlite3
+    volumes:
+      - ./data:/data
+      - ./config:/app/config:ro
+      - ./secrets/google-sa.json:/run/secrets/google-sa.json:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "5"
+  test:
+    profiles: [test]
+    build:
+      context: .
+      target: test
+    image: sitcon-editorial-bot-test:local
+    network_mode: none

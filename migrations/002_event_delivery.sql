@@ -1,0 +1,3 @@
+ALTER TABLE events ADD COLUMN thread_id INTEGER;
+ALTER TABLE events ADD COLUMN user_id INTEGER;
+ALTER TABLE events ADD COLUMN message_id INTEGER;
