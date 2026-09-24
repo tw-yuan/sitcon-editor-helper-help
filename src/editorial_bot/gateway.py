@@ -293,9 +293,7 @@ class Gateway:
                 or (match[1] == "page" and not match[3])
             ):
                 raise ValueError("無效的送審按鈕。")
-            packet = await self.reviews.authorize(
-                match[2], update.effective_chat.id, message.message_thread_id, message.message_id
-            )
+            packet = await self.reviews.authorize(match[2], update.effective_chat.id, message.message_id)
         except ValueError as exc:
             await self.answer_callback(callback, str(exc), alert=True)
             return

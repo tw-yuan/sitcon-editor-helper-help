@@ -61,14 +61,17 @@ class ReviewPackets:
             "INSERT OR IGNORE INTO review_messages(packet_id,chat_id,message_id) VALUES (?,?,?)", (key, chat, message)
         )
 
-    async def authorize(self, key, chat, thread, message):
+    async def authorize(self, key, chat, message):
         if not re.fullmatch(r"[a-f0-9]{24}", key):
             raise ValueError("無效的送審按鈕。")
         packet = await self.get(key)
-        if packet["chat_id"] != chat or packet["thread_id"] != thread:
-            raise ValueError("請在原群組及原話題的送審通知簽到。")
+        if packet["chat_id"] != chat:
+            raise ValueError("請在原群組的送審通知簽到。")
         if not await self.store.one("SELECT 1 FROM authorized_groups WHERE chat_id=?", (chat,)):
             raise ValueError("本群尚未授權。")
+        # A Telegram message ID is unique within its chat, including across forum topics.
+        # Callback message_thread_id may identify a reply thread, unlike the review request.
+        # Bind authorization to the delivered notice, not to that optional metadata.
         if not await self.store.one(
             "SELECT 1 FROM review_messages WHERE packet_id=? AND chat_id=? AND message_id=?", (key, chat, message)
         ):

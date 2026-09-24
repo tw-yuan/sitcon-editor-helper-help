@@ -123,7 +123,7 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 
 `ReviewDocuments` 使用 Google Drive 的 `files.export` 取得完整 Docs PDF，沒有另建 Drive 檔案，也不提供公開下載端點；最大 10 MB，檢查 PDF 檔頭。匯出及簽到都先核對 Google 文件位於核准根目錄或直接子資料夾，以及 service account 的編輯／下載能力。每次 review 以操作識別保存快照，同輪重試沿用相同 PDF；不同 review 產生新的快照與各自的已讀名單。顯示匯出時間並提醒文件修改後需重新 review，避免把舊 PDF 當成最新文案。
 
-`ReviewPackets` 管理通知及簽到：`review_packets` 保存 PDF BLOB、原始通知、文件與群組／topic；`document_signatures` 以文件 ID＋Telegram 數字 ID 凍結首次簽名字串；`review_reads` 保存各份快照的已讀者；`review_messages` 保存實際送達訊息 ID、名單頁碼與待更新狀態。任一已授權群內使用者均可按原通知簽到，不限發起 review 的人，也不套用短期補問的一次性／30 分鐘限制。Callback 必須符合原群、原 topic、已綁定的原訊息；轉傳到別群或偽造 message_id 不接受。沒有 Telegram username 時用 Telegram ID 作為簽名。
+`ReviewPackets` 管理通知及簽到：`review_packets` 保存 PDF BLOB、原始通知、文件與群組／topic；`document_signatures` 以文件 ID＋Telegram 數字 ID 凍結首次簽名字串；`review_reads` 保存各份快照的已讀者；`review_messages` 保存實際送達訊息 ID、名單頁碼與待更新狀態。任一已授權群內使用者均可按原通知簽到，不限發起 review 的人，也不套用短期補問的一次性／30 分鐘限制。Callback 必須符合原群及已綁定的原訊息。Telegram 的 message_id 在群組內唯一，跨 topic 也不重複；message_thread_id 則可能是通知本身的回覆串，與原始 review 指令不同，因此不拿 callback 的 thread 值比對授權。通知及後續回覆仍沿用保存的群組／topic；轉傳到別群或同群其他話題會有不同訊息識別，不能簽到。沒有 Telegram username 時用 Telegram ID 作為簽名。
 
 簽到以文件鎖序列化，定位跨 tabs 的唯一「校稿簽到串：」段落，只插入新名字，保留既有名字、占位頓號及正文。依 UTF-16 計算位置，使用 `requiredRevisionId` 防止寫入過期位置；衝突或結果不明會先重讀，已找到簽名就不再插入。只有確認文件已有簽名後，才以 SQLite 交易保存已讀紀錄及通知更新需求。簽名未確認成功不顯示已看過；中斷後再次點擊會沿用同一身分接續，不代其他人簽到。
 
@@ -222,7 +222,8 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 ## 本次交付驗證
 
-- 156 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
+- 164 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
+- 原通知 callback 因回覆串 ID 不同被誤擋：新增真實 Telegram Update 結構的 6 個回歸案例，修正前均重現拒絕、修正後可簽到／分頁；另覆蓋撤銷授權及其他 review 混用訊息 ID。舊測試的跨 topic 案例改為不同 message_id，以符合轉傳會建立新訊息的實際契約。
 - #678 文案成功唯讀匯出 76,429 bytes PDF，確認存在文件 revision 及唯一簽到欄位，未實際插入測試簽名或發送測試附件。
 - Google、GitLab、Telegram 的 Compose 唯讀預檢通過；沒有執行真實建卡、建檔或群組通知測試。
 - 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問、同意按鈕候選、純文字回覆及 MMDD 開卡參數解析檢查通過，驗收腳本在工具邊界封鎖寫入。

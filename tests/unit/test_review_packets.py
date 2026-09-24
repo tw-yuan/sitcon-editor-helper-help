@@ -31,7 +31,7 @@ async def packet(reviews, key="a" * 24):
     )
     message_id = 456 if key == "a" * 24 else 457  # Separate reviews are distinct Telegram messages.
     await reviews.bind(key, -1, message_id)
-    return await reviews.authorize(key, -1, 55, message_id)
+    return await reviews.authorize(key, -1, message_id)
 
 
 def person(user_id, username):
@@ -88,11 +88,11 @@ async def test_telegram_failure_retries_edit_without_resigning_document(reviews)
     assert "已看過：Telegram ID 8" in bot.edit_message_text.call_args.kwargs["text"]
 
 
-@pytest.mark.parametrize("chat,thread,message", [(-2, 55, 456), (-1, 56, 456), (-1, 55, 457)])
-async def test_forged_or_forwarded_button_is_rejected(reviews, chat, thread, message):
+@pytest.mark.parametrize("chat,message", [(-2, 456), (-1, 999), (-1, 457)])
+async def test_forged_or_forwarded_button_is_rejected(reviews, chat, message):
     row = await packet(reviews)
     with pytest.raises(ValueError):
-        await reviews.authorize(row["id"], chat, thread, message)
+        await reviews.authorize(row["id"], chat, message)
     reviews.documents.sign.assert_not_awaited()
 
 
@@ -127,3 +127,19 @@ async def test_large_reader_list_is_paginated_without_losing_names(reviews):
     assert page > 0
     for i in range(200):
         assert "@" + "x" * 25 + str(i) in combined
+
+
+async def test_known_notice_from_revoked_chat_is_rejected(reviews):
+    row = await packet(reviews)
+    await reviews.store.execute("DELETE FROM authorized_groups WHERE chat_id=-1")
+    with pytest.raises(ValueError, match="本群尚未授權"):
+        await reviews.authorize(row["id"], -1, 456)
+    reviews.documents.sign.assert_not_awaited()
+
+
+async def test_other_packet_cannot_reuse_a_bound_notice(reviews):
+    first = await packet(reviews)
+    await packet(reviews, "b" * 24)
+    with pytest.raises(ValueError, match="原始送審通知"):
+        await reviews.authorize(first["id"], -1, 457)
+    reviews.documents.sign.assert_not_awaited()

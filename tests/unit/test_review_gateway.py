@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram import Update
 from telegram.error import TimedOut
 
 from editorial_bot.agent.tools.base import ToolContext
@@ -88,7 +89,8 @@ async def test_uncertain_pdf_delivery_does_not_send_sign_in_notice_or_resend_pdf
     assert (await gateway.store.one("SELECT state FROM outbox ORDER BY id LIMIT 1"))["state"] == "uncertain"
 
 
-@pytest.mark.parametrize("topic,message,chat", [(56, 456, -1), (55, 999, -1), (55, 456, -2)])
+# Forwarding into another topic creates a new message ID within the same chat.
+@pytest.mark.parametrize("topic,message,chat", [(56, 457, -1), (55, 999, -1), (55, 456, -2)])
 async def test_callbacks_cannot_sign_other_chat_topic_or_message(setup, topic, message, chat):
     gateway, reviews, bot, key = setup
     await gateway.deliver(bot)
@@ -149,3 +151,45 @@ async def test_pdf_review_receipt_is_recovered_after_event_crash(setup):
     assert len(notices) == 1 and "已看過：尚無" in notices[0]["text"]
     await gateway.handle(click(key), SimpleNamespace(bot=bot))
     assert "已看過：@reader_8" in bot.edit_message_text.call_args.kwargs["text"]
+
+
+@pytest.mark.parametrize("stored_thread,callback_thread", [(None, 123), (123, 456), (55, None)])
+@pytest.mark.parametrize("action", ["sign", "page"])
+async def test_original_notice_callback_accepts_reply_thread_metadata(setup, stored_thread, callback_thread, action):
+    gateway, reviews, bot, key = setup
+    await gateway.store.execute("UPDATE review_packets SET thread_id=? WHERE id=?", (stored_thread, key))
+    await gateway.deliver(bot)
+    # Telegram can attach a reply thread to the bot notice although the request had no topic.
+    message = {
+        "message_id": 456,
+        "date": 1,
+        "chat": {"id": -1, "type": "supergroup"},
+        "text": "送審通知",
+    }
+    if callback_thread is not None:
+        message["message_thread_id"] = callback_thread
+    callback_data = f"review_{action}:{key}" + (":0" if action == "page" else "")
+    update = Update.de_json(
+        {
+            "update_id": 12345,
+            "callback_query": {
+                "id": "original-notice-click",
+                "chat_instance": "original-chat",
+                "from": {"id": 8, "is_bot": False, "first_name": "Reader", "username": "reader_8"},
+                "message": message,
+                "data": callback_data,
+            },
+        },
+        bot,
+    )
+    bot.answer_callback_query = AsyncMock()
+    await gateway.handle(update, SimpleNamespace(bot=bot))
+    assert not bot.answer_callback_query.call_args.kwargs.get("show_alert")
+    assert bot.edit_message_text.call_args.kwargs["message_id"] == 456
+    if action == "sign":
+        reviews.documents.sign.assert_awaited_once_with("doc", "@reader_8")
+        assert "已看過：@reader_8" in bot.edit_message_text.call_args.kwargs["text"]
+    else:
+        reviews.documents.sign.assert_not_awaited()
+    gateway.agent.handle.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
