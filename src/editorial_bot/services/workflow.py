@@ -31,11 +31,21 @@ class CardWorkflow:
         self.locks: dict[str, asyncio.Lock] = {}
 
     async def create(self, payload: dict, ctx, *, resume_id: str | None = None) -> dict:
+        payload = {**payload, "title": payload["title"].strip()}
         date.fromisoformat(payload["due_date"])
         if not payload["title"].strip():
             raise ValueError("卡片標題不可空白")
         key = resume_id or operation_key(ctx.event_id, "create_card", payload)
         async with self.locks.setdefault(key, asyncio.Lock()):
+            if not resume_id:
+                unfinished = await self.store.one(
+                    "SELECT id FROM operations WHERE event_id=? AND kind='create_card' AND state!='done' AND id!=?",
+                    (ctx.event_id, key),
+                )
+                if unfinished:
+                    raise ValueError(
+                        f"本輪已有未完成開卡 {unfinished['id']}，請用 resume_operation 接續，不要另開一份。"
+                    )
             op = await self.store.operation(key, ctx.event_id, ctx.chat_id, ctx.user_id, "create_card", payload)
             if op["chat_id"] != ctx.chat_id or op["user_id"] != ctx.user_id:
                 raise ValueError("只能接續自己在本群的開卡操作。")

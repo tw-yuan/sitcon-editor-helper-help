@@ -55,10 +55,12 @@ class Store:
             await self.conn.commit()
             return cur.lastrowid or 0
 
-    async def claim_event(self, event_id: str, chat_id: int) -> bool:
+    async def claim_event(self, event_id: str, chat_id: int, thread_id=None, user_id=None, message_id=None) -> bool:
         async with self.lock:
             cur = await self.conn.execute(
-                "INSERT OR IGNORE INTO events(id,chat_id,state) VALUES (?,?,'running')", (event_id, chat_id)
+                "INSERT OR IGNORE INTO events(id,chat_id,state,thread_id,user_id,message_id) "
+                "VALUES (?,?,'running',?,?,?)",
+                (event_id, chat_id, thread_id, user_id, message_id),
             )
             await self.conn.commit()
             return cur.rowcount == 1
@@ -99,3 +101,9 @@ class Store:
             )
             await self.conn.commit()
             return int(cur.lastrowid)
+
+    async def claim_delivery(self, row_id: int) -> bool:
+        async with self.lock:
+            cur = await self.conn.execute("UPDATE outbox SET state='sending' WHERE id=? AND state='pending'", (row_id,))
+            await self.conn.commit()
+            return cur.rowcount == 1

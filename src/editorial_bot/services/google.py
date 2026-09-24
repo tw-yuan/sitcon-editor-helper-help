@@ -79,6 +79,11 @@ class Google:
                 raise ValueError("範本必須為 Google Docs 文件。")
             if not template.get("capabilities", {}).get("canCopy"):
                 raise ValueError("Google service account 無法複製文案範本。")
+            document = await self.execute(
+                self.docs.documents().get(documentId=self.settings.doc_template_id, includeTabsContent=True)
+            )
+            if not all(token in document_text(document) for token in ("TITTLE", "DATE", "GITLAB_LINK", "DIR_LINK")):
+                raise ValueError("文案範本缺少 TITTLE、DATE、GITLAB_LINK 或 DIR_LINK，請先修正範本。")
         return root
 
     async def find_resource(self, parent: str, operation: str, kind: str) -> dict | None:
@@ -140,18 +145,30 @@ class Google:
         if folder_id not in metadata.get("parents", []):
             raise ValueError("文件與本次資料夾不相符")
         folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-        values = {"TITTLE": title, "GITLAB_LINK": issue_url, "DATE": due_date.replace("-", "/"), "DIR_LINK": folder_url}
-        requests = [
-            {"replaceAllText": {"containsText": {"text": key, "matchCase": True}, "replaceText": value}}
-            for key, value in values.items()
-        ]
-        await self.execute(
-            self.docs.documents().batchUpdate(documentId=document_id, body={"requests": requests}), write=True
-        )
+        folder = await self.metadata(folder_id)
+        if self.settings.drive_root_folder_id not in folder.get("parents", []):
+            raise ValueError("文案資料夾已移出核准根目錄，停止寫入。")
         doc = await self.execute(self.docs.documents().get(documentId=document_id, includeTabsContent=True))
         text = document_text(doc)
         if issue_url not in text or folder_url not in text:
-            raise ValueError("文案範本缺少 GITLAB_LINK／DIR_LINK，連結尚未完整填入。")
+            # Replace title last so a title containing DATE is not interpreted as a template token.
+            values = {
+                "GITLAB_LINK": issue_url,
+                "DATE": due_date.replace("-", "/"),
+                "DIR_LINK": folder_url,
+                "TITTLE": title,
+            }
+            requests = [
+                {"replaceAllText": {"containsText": {"text": key, "matchCase": True}, "replaceText": value}}
+                for key, value in values.items()
+            ]
+            await self.execute(
+                self.docs.documents().batchUpdate(documentId=document_id, body={"requests": requests}), write=True
+            )
+            doc = await self.execute(self.docs.documents().get(documentId=document_id, includeTabsContent=True))
+            text = document_text(doc)
+            if issue_url not in text or folder_url not in text:
+                raise ValueError("文案範本缺少 GITLAB_LINK／DIR_LINK，連結尚未完整填入。")
         styles = link_styles(doc, [issue_url, folder_url])
         if styles:
             await self.execute(
