@@ -143,3 +143,26 @@ async def test_creator_lookup_outage_does_not_silently_fall_back_or_create(tools
     with pytest.raises(RemoteError):
         await tools.create(args, ctx)
     tools.workflow.create.assert_not_awaited()
+
+
+@pytest.mark.parametrize("document,folder", [(True, True), (True, False), (False, True), (False, False)])
+async def test_review_labels_each_available_link_on_its_own_line(tools, document, folder):
+    issue = await tools.gl.resolve("1")
+    doc_url = "https://docs.google.com/document/d/doc/edit"
+    folder_url = "https://drive.google.com/drive/folders/folder"
+    issue["description"] = "\n".join(([doc_url] if document else []) + ([folder_url] if folder else []))
+    issue["labels"] = ["社群文案"] if document else ["編輯組專案"]
+    tools.gl.resolve.side_effect = None
+    tools.gl.resolve.return_value = issue
+    ctx = context()
+    await tools.review(Review(targets=["1"]), ctx)
+    expected = []
+    if document:
+        expected.append(f"文案：{doc_url}")
+    if folder:
+        expected.append(f"資料夾：{folder_url}")
+    expected.append(f"卡片：{issue['web_url']}")
+    assert ctx.notices[0].splitlines()[1:] == expected
+    tools.gl.update.assert_awaited_once_with(1, add_labels=["Status::Review"])
+    saved = await tools.store.one("SELECT result FROM operations WHERE kind='review'")
+    assert json.loads(saved["result"])["notification"] == ctx.notices[0]

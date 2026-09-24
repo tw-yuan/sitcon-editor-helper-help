@@ -377,7 +377,10 @@ class EditorialTools:
                 f"這是由 {who} 負責的 #{issue['iid']} {html.escape(issue['title'])} {'文案' if docs else '任務'}，請 "
             )
             notice += "、".join(dict.fromkeys(mention(m) for m in chiefs)) + " 幫忙 review\n"
-            notice += "\n".join(html.escape(u) for u in dict.fromkeys([*docs[:1], *folders[:1], issue["web_url"]]))
+            links = [("文案", url) for url in docs[:1]]
+            links += [("資料夾", url) for url in folders[:1]]
+            links.append(("卡片", issue["web_url"]))
+            notice += "\n".join(f"{label}：{html.escape(url)}" for label, url in links)
             if missing:
                 notice += "\n無 Telegram 對照，未能標註：" + html.escape("、".join(missing))
             prepared.append((issue, notice))
