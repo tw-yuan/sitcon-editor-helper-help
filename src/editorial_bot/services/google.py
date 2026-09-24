@@ -63,7 +63,7 @@ class Google:
             self.drive.files().get(
                 fileId=file_id,
                 supportsAllDrives=True,
-                fields="id,name,mimeType,driveId,parents,webViewLink,capabilities(canAddChildren,canCopy,canEdit)",
+                fields="id,name,mimeType,driveId,parents,webViewLink,capabilities(canAddChildren,canCopy,canEdit,canDownload)",
             )
         )
 
