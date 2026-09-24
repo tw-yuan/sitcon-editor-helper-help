@@ -196,6 +196,24 @@ class EditorialTools:
 
         return asdict(matches[0])
 
+    async def creator_attribution(self, ctx, roster) -> str:
+        member = roster.by_telegram_id(ctx.user_id)
+        if not member and ctx.username:
+            matches = roster.search_by_name(ctx.username)
+            if len(matches) > 1:
+                raise ValueError("建立者無法唯一對應名冊，請先修正名冊。")
+            member = matches[0] if matches else None
+        if member:
+            username = await self.gl.user_username(member.gitlab_id)
+            if username:
+                return f"@{username}"
+        if ctx.username:
+            if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{4,31}", ctx.username):
+                raise ValueError("建立者的 Telegram username 格式不正確")
+            # Inline code prevents a Telegram handle from pinging an unrelated GitLab user.
+            return f"Telegram：`@{ctx.username}`"
+        return f"Telegram ID：{ctx.user_id}"
+
     async def create(self, args, ctx):
         from ...services.dates import validate_explicit_date
 
@@ -209,9 +227,7 @@ class EditorialTools:
         if not any(s.startswith("Status::") for s in labels):
             labels = [*labels, self.settings.initial_status]
         payload = args.model_dump()
-        payload.update(
-            assignee_ids=ids, labels=labels, requester=f"@{ctx.username}" if ctx.username else str(ctx.user_id)
-        )
+        payload.update(assignee_ids=ids, labels=labels, requester=await self.creator_attribution(ctx, roster))
         result = await self.workflow.create(payload, ctx)
         if not args.assignee_ids:
             result["default_assignment"] = roster.default_member().nickname

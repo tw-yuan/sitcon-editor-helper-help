@@ -57,3 +57,35 @@ async def test_mutating_timeout_is_not_blindly_retried(gitlab):
         await gitlab.comment(1, "review")
     assert error.value.uncertain
     assert route.call_count == 1
+
+
+@respx.mock
+async def test_gitlab_username_is_resolved_by_exact_id(gitlab):
+    respx.get("https://gitlab.com/api/v4/users/42").mock(
+        return_value=httpx.Response(200, json={"id": 42, "username": "gitlab.writer-1"})
+    )
+    assert await gitlab.user_username(42) == "gitlab.writer-1"
+
+
+@respx.mock
+async def test_missing_gitlab_account_allows_explicit_fallback(gitlab):
+    respx.get("https://gitlab.com/api/v4/users/42").mock(return_value=httpx.Response(404))
+    assert await gitlab.user_username(42) is None
+
+
+@pytest.mark.parametrize("status", [403, 429, 503])
+@respx.mock
+async def test_failed_gitlab_lookup_is_not_a_missing_account(gitlab, status):
+    from editorial_bot.services.gitlab import RemoteError
+
+    respx.get("https://gitlab.com/api/v4/users/42").mock(return_value=httpx.Response(status))
+    with pytest.raises(RemoteError):
+        await gitlab.user_username(42)
+
+
+@pytest.mark.parametrize("data", [{"id": 43, "username": "someone_else"}, {"id": 42, "username": "bad\n/close"}])
+@respx.mock
+async def test_invalid_gitlab_identity_response_is_rejected(gitlab, data):
+    respx.get("https://gitlab.com/api/v4/users/42").mock(return_value=httpx.Response(200, json=data))
+    with pytest.raises(ValueError):
+        await gitlab.user_username(42)

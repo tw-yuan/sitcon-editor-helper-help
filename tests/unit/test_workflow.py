@@ -102,3 +102,18 @@ async def test_unknown_write_can_recover_using_remote_operation_marker(setup):
     google.find_resource.side_effect = [{"id": "folder"}, None]
     await workflow.create(payload, ctx, resume_id=operation["id"])
     google.create_folder.assert_awaited_once()
+
+
+@pytest.mark.parametrize("document", [True, False])
+async def test_resource_links_render_as_separate_paragraphs(setup, document):
+    workflow, _google, gitlab, _store, ctx, payload = setup
+    payload.update(document=document, requester="@gitlab_writer", description="原有說明")
+    await workflow.create(payload, ctx)
+    description = gitlab.create.call_args.args[0]["description"]
+    assert "\n\n資料夾：https://drive.google.com/drive/folders/folder\n\n" in description
+    assert "\n\n建立者：@gitlab_writer\n\n" in description
+    if document:
+        assert "\n\n文案：https://docs.google.com/document/d/doc/edit\n\n" in description
+    else:
+        assert "文案：" not in description
+    assert description.startswith("原有說明\n\n")

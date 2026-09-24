@@ -89,6 +89,28 @@ class GitLab:
             raise ValueError("不能同時指定相同 scope 的多個 label。")
         return selected
 
+    async def user_username(self, user_id: int) -> str | None:
+        """Resolve a roster ID to a real GitLab mention; only 404 means absent."""
+        if user_id <= 0:
+            raise ValueError("GitLab ID 必須是正整數")
+        try:
+            response = await self.client.get(f"/users/{user_id}")
+        except httpx.HTTPError:
+            raise RemoteError("GitLab", None) from None
+        if response.status_code == 404:
+            return None
+        if response.is_error:
+            raise RemoteError("GitLab", response.status_code)
+        user = response.json()
+        username = user.get("username") if isinstance(user, dict) else None
+        if (
+            not isinstance(username, str)
+            or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", username)
+            or user.get("id") != user_id
+        ):
+            raise ValueError("GitLab 使用者回應的 ID 或 username 不正確")
+        return username
+
     async def get(self, iid: int) -> dict:
         return (await self.request("GET", f"/issues/{iid}")).json()
 

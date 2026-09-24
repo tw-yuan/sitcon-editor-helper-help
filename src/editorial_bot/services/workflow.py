@@ -19,7 +19,8 @@ def resource_links(folder_id: str, document_id: str | None) -> str:
     if document_id:
         lines.append(f"文案：https://docs.google.com/document/d/{document_id}/edit")
     lines.append("<!-- editorial-resources:end -->")
-    return "\n".join(lines)
+    # Blank lines keep each link in its own paragraph in GitLab descriptions.
+    return "\n\n".join(lines)
 
 
 class CardWorkflow:

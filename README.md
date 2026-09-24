@@ -95,6 +95,7 @@ review 123 124
 ```
 
 - 一張卡建立一個 `MMDD_TITLE` 資料夾，日期取到期日；文案卡複製範本，純任務不建立 Docs。
+- 卡片描述中的資料夾、文案與建立者各自分段顯示。建立者優先標註名冊對應的 GitLab `@username`；沒有對應或 GitLab 帳號不存在時，才以一般文字顯示 Telegram username（不觸發 GitLab 標註）。
 - 文案卡預設 `社群文案`、任務卡預設 `編輯組專案`，狀態預設 `Status::Inbox`。所有 label 必須既有，不會自建。
 - 未指定負責人時採名冊唯一 `default=yes`。只有相對日期時會補問。
 - Review 自動標作者與名冊總副召。未關閉清單仍包含 Review；Report 不會自動關卡。

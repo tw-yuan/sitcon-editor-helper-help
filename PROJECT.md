@@ -92,10 +92,12 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 3. 驗證所有 label 已存在。未指定 label 時，文案卡套 `社群文案`、任務卡套 `編輯組專案`；沒有指定狀態時加 `Status::Inbox`。不自動加年度 label。
 4. 預檢固定根目錄的 Shared Drive 屬性與建立權限；文案卡再檢查範本可複製、必要欄位存在。
 5. 在固定根目錄建立到期日 `MMDD_TITLE` 資料夾；文案卡複製範本到其中，名稱也使用 `MMDD_TITLE`。
-6. 建立 GitLab Issue。description 包含資料夾連結、可選文案連結、建立者及操作識別。
+6. 建立 GitLab Issue。description 包含資料夾連結、可選文案連結、建立者及操作識別；資料夾、文案、建立者以空行分段，避免 GitLab 將一般換行合併顯示。
 7. 讀回 Issue，驗證 labels 與所有負責人。GitLab 若不接受多人，不把部分成功說成全部成功。
 8. 在文案填入 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK`，並設定兩個 URL 為可點擊連結。保留其他範本正文。
 9. 保存 Issue／資料夾／文件對照，回覆實際網址與操作 ID。
+
+建立者由程式依 Telegram 數字 ID（優先）或精確 username 查名冊，再用 GitLab ID 查實際 username，寫入 `建立者：@username`，不由模型猜帳號，也不取負責人當建立者。名冊無對應或 GitLab 回 404 才回退為 `Telegram：` 加不會觸發 GitLab mention 的 username 純顯示；無 Telegram username 則顯示 Telegram ID。GitLab 權限、限流、連線等查詢錯誤不視為沒有帳號，會在建立資源前停止。GitLab Issue 的系統作者仍是執行 API 的 service account，描述內另行標註真正提出開卡需求的人。
 
 資料夾每張卡獨立，不以名稱查找合併：相同 `MMDD_TITLE` 仍可能是不同年度或不同工作。重試以操作識別及 Drive `appProperties` 對應資源。非文案卡同樣有資料夾，但不建立 Docs。
 
@@ -204,7 +206,7 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 ## 本次交付驗證
 
-- 108 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
+- 123 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
 - Google、GitLab、Telegram 的 Compose 唯讀預檢通過；沒有執行真實建卡、建檔或群組通知測試。
 - 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問、同意按鈕候選、純文字回覆及 MMDD 開卡參數解析檢查通過，驗收腳本在工具邊界封鎖寫入。
 - 最終正式映像 pip-audit 未發現已知套件弱點；交付檔案未包含實際 token 或 API key。
