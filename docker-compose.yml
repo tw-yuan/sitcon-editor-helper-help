@@ -11,7 +11,6 @@ services:
       DB_PATH: /data/editorial.sqlite3
     volumes:
       - ./data:/data
-      - ./config:/app/config:ro
       - ./secrets/google-sa.json:/run/secrets/google-sa.json:ro
     logging:
       driver: json-file
