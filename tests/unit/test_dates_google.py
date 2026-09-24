@@ -27,3 +27,41 @@ def test_no_guessing_dates(text):
 
 def test_explicit_future_year():
     validate_explicit_date("開卡 2027年1月5日", "2027-01-05", "Asia/Taipei")
+
+
+@pytest.mark.parametrize("compact,month,day", [("0925", 9, 25), ("0105", 1, 5), ("1231", 12, 31)])
+def test_compact_card_date_is_an_explicit_deadline(compact, month, day):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    year = datetime.now(ZoneInfo("Asia/Taipei")).year
+    validate_explicit_date(f"小石開卡 {compact} test", f"{year}-{month:02d}-{day:02d}", "Asia/Taipei")
+
+
+@pytest.mark.parametrize("number", ["10925", "20260925", "#0925", "test0925", "0925test", "0925/7"])
+def test_compact_date_does_not_match_other_identifiers(number):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    year = datetime.now(ZoneInfo("Asia/Taipei")).year
+    with pytest.raises(ValueError):
+        validate_explicit_date(f"小石開卡 {number} test", f"{year}-09-25", "Asia/Taipei")
+
+
+@pytest.mark.parametrize("compact", ["0230", "0000", "1331"])
+def test_impossible_compact_dates_are_rejected(compact):
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    year = datetime.now(ZoneInfo("Asia/Taipei")).year
+    with pytest.raises(ValueError):
+        validate_explicit_date(f"小石開卡 {compact} test", f"{year}-09-25", "Asia/Taipei")
+
+
+def test_compact_date_does_not_guess_a_future_year():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    year = datetime.now(ZoneInfo("Asia/Taipei")).year
+    with pytest.raises(ValueError):
+        validate_explicit_date("小石開卡 0925 test", f"{year + 1}-09-25", "Asia/Taipei")

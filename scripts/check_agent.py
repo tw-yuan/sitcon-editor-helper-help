@@ -6,18 +6,21 @@ Run inside Compose with the source tree mounted at /checks. Never sends Telegram
 import asyncio
 import json
 import re
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-from editorial_bot.agent.core import Agent, AgentRequest
+from editorial_bot.agent.core import ASK_USER_SPEC, Agent, AgentRequest
 from editorial_bot.agent.prompts import PromptBuilder
 from editorial_bot.agent.tools.base import ToolRegistry
 from editorial_bot.agent.tools.editorial import EditorialTools
 from editorial_bot.agent.tools.reaction_tools import build_reaction_tools
 from editorial_bot.agent.tools.search_tools import build_search_tools
 from editorial_bot.logging_setup import configure
+from editorial_bot.services.dates import validate_explicit_date
 from editorial_bot.services.gitlab import GitLab
 from editorial_bot.services.google import Google
 from editorial_bot.services.knowledge import Knowledge
-from editorial_bot.services.llm.base import build_llm_client
+from editorial_bot.services.llm.base import Message, TextBlock, build_llm_client
 from editorial_bot.services.sheets_roster import RosterService
 from editorial_bot.services.web_search import build_web_search_service
 from editorial_bot.services.workflow import CardWorkflow
@@ -95,11 +98,25 @@ async def main():
                 r"(?m)^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)|`|\*\*|\[[^\]]+\]\([^)]+\)|</?[A-Za-z][^>]*>", result.reply
             ), "回覆包含 Markdown 或 HTML 語法"
         assert not attempted_writes, f"意外要求寫入工具：{attempted_writes}"
+        # Inspect the live model's proposed arguments only. Never execute these tool calls.
+        create = next(tool for tool in tools if tool.name == "create_card")
+        compact = await build_llm_client(settings).chat(
+            system=await PromptBuilder(settings, store).build(chat_id=-1),
+            messages=[Message("user", [TextBlock("小石開卡 0925 test")])],
+            tools=[create.spec(), ASK_USER_SPEC],
+            thinking=settings.llm_thinking,
+        )
+        assert len(compact.tool_calls) == 1 and compact.tool_calls[0].name == "create_card", "MMDD 格式不應補問"
+        parsed = create.args_model.model_validate(compact.tool_calls[0].arguments)
+        expected_date = f"{datetime.now(ZoneInfo(settings.tz)).year}-09-25"
+        assert parsed.title == "test" and parsed.due_date == expected_date, "MMDD 到期日或標題解析錯誤"
+        validate_explicit_date("小石開卡 0925 test", parsed.due_date, settings.tz)
         print(
             json.dumps(
                 {
                     "live_label_tool_call": True,
                     "relative_date_asks_user": True,
+                    "compact_date_and_title": True,
                     "plain_text_replies": True,
                     "remote_writes": 0,
                 },
