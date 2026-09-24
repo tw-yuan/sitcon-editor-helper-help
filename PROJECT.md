@@ -163,7 +163,7 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 ## 已知限制與待處理事項
 
-- 正式切換尚待使用者確認；目前沒有執行真實開卡、建檔或群組通知驗收。這些寫入路徑以隔離模擬測試覆蓋。
+- 已依使用者明確授權啟動正式服務；目前沒有人工建立測試卡、測試檔或發送測試群組通知。這些寫入路徑以隔離模擬測試覆蓋。
 - Telegram API 沒有客戶端 idempotency key，無法承諾通知恰好一次。結果不明時由管理員查核。
 - 只支援單一 bot instance／SQLite 資料目錄；不能用 Compose replicas 啟動多個 poller。
 - 2026-09-24 唯讀檢查發現名冊 `@Zctong`、`@yorukot` 的 GitLab ID 查詢回 404；這兩筆指派會被拒絕，Telegram 標註不受影響。請在原表查核修正，程式不猜測替代 ID，也不自行修改原表。
@@ -182,6 +182,6 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 - 主模型及獨立公開網路搜尋可回應；真實 agent 查 label、相對日期補問通過，驗收腳本在工具邊界封鎖寫入。
 - 最終正式映像 pip-audit 未發現已知套件弱點；交付檔案未包含實際 token 或 API key。
 - 使用者已停用舊 n8n，唯讀確認 webhook 已解除，當時尚有 3 筆待處理 Telegram updates。
-- 正式啟動被自動核准審查擋下，理由是處理 pending updates 可能觸發遠端寫入，需要明確接管授權。尚未啟動 long polling。
+- 使用者已明確授權啟動並處理 pending updates；`docker compose up --build -d bot` 成功，log 顯示 `Editorial bot ready` 與 `Application started`。初次檢查容器 running、restart count 0、兩版 migration 已套用；授權群組初始為 0，待管理員在群組 `/authorize`。
 
 API 行為參考：[GitLab Issues API](https://docs.gitlab.com/api/issues/)、[Google Docs tabs](https://developers.google.com/workspace/docs/api/how-tos/tabs)、[python-telegram-bot Application](https://docs.python-telegram-bot.org/en/stable/telegram.ext.application.html)。依賴修補參考：[cryptography changelog](https://github.com/pyca/cryptography/blob/main/CHANGELOG.rst)。
