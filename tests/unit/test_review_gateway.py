@@ -1,0 +1,151 @@
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
+import pytest
+from telegram.error import TimedOut
+
+from editorial_bot.agent.tools.base import ToolContext
+from editorial_bot.gateway import Gateway
+from editorial_bot.review_packets import ReviewPackets
+from editorial_bot.storage.db import Store
+
+
+@pytest.fixture
+async def setup(tmp_path):
+    store = await Store.open(str(tmp_path / "db.sqlite3"))
+    settings = SimpleNamespace(
+        max_concurrent_agent_turns=4,
+        context_ttl_seconds=1800,
+        telegram_admin_id=7,
+        bot_trigger_name="小石",
+        tz="Asia/Taipei",
+    )
+    docs = SimpleNamespace(export_pdf=AsyncMock(return_value=b"%PDF-1.7\nhello"), sign=AsyncMock())
+    reviews = ReviewPackets(store, docs, settings)
+    gateway = Gateway(settings, store, AsyncMock(), AsyncMock(), None, None, reviews=reviews)
+    await store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    ctx = ToolContext(-1, 55, 7, "author", "review 678", event_id="event")
+    key = "a" * 24
+    notice = "送審通知\n文案：https://docs.google.com/document/d/doc/edit\n資料夾：https://drive.google.com/drive/folders/folder\n卡片：https://gitlab.com/p/-/issues/678"
+    await reviews.prepare(key, ctx, {"iid": 678, "title": "文章"}, "doc", notice)
+    receipt = {"notification": notice, "review_id": key}
+    await store.claim_event("event", -1, 55, 7, 123)
+    await gateway.stage("event", -1, 55, 123, gateway.notice_messages([notice], [receipt]))
+    bot = SimpleNamespace(
+        id=99,
+        username="editorbot",
+        send_document=AsyncMock(return_value=SimpleNamespace(message_id=455)),
+        send_message=AsyncMock(return_value=SimpleNamespace(message_id=456)),
+        edit_message_text=AsyncMock(),
+        send_chat_action=AsyncMock(),
+        set_message_reaction=AsyncMock(),
+    )
+    yield gateway, reviews, bot, key
+    await store.close()
+
+
+def click(key, user=8, topic=55, message=456, chat=-1):
+    return SimpleNamespace(
+        update_id=10 + user,
+        effective_message=SimpleNamespace(
+            text="notification", caption=None, message_id=message, message_thread_id=topic
+        ),
+        effective_chat=SimpleNamespace(id=chat, type="supergroup"),
+        effective_user=SimpleNamespace(id=user, username=f"reader_{user}", is_bot=False),
+        callback_query=SimpleNamespace(data=f"review_sign:{key}", answer=AsyncMock()),
+    )
+
+
+async def test_pdf_and_sign_in_notice_send_once_in_same_topic(setup):
+    gateway, reviews, bot, key = setup
+    await gateway.deliver(bot)
+    await gateway.deliver(bot)
+    bot.send_document.assert_awaited_once()
+    bot.send_message.assert_awaited_once()
+    assert bot.send_document.call_args.kwargs["message_thread_id"] == 55
+    assert bot.send_document.call_args.kwargs["document"].input_file_content.startswith(b"%PDF-")
+    assert bot.send_message.call_args.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == f"review_sign:{key}"
+    assert "已看過：尚無" in bot.send_message.call_args.kwargs["text"]
+    await gateway.handle(click(key, 8), SimpleNamespace(bot=bot))
+    await gateway.handle(click(key, 9), SimpleNamespace(bot=bot))
+    await gateway.handle(click(key, 8), SimpleNamespace(bot=bot))
+    assert "已看過：@reader_8、@reader_9" in bot.edit_message_text.call_args.kwargs["text"]
+    assert bot.edit_message_text.call_args.kwargs["message_id"] == 456
+    assert reviews.documents.sign.await_count == 2
+    gateway.agent.handle.assert_not_awaited()
+    bot.send_message.assert_awaited_once()
+    bot.set_message_reaction.assert_not_awaited()
+
+
+async def test_uncertain_pdf_delivery_does_not_send_sign_in_notice_or_resend_pdf(setup):
+    gateway, _reviews, bot, _key = setup
+    bot.send_document.side_effect = TimedOut()
+    await gateway.deliver(bot)
+    await gateway.deliver(bot)
+    bot.send_document.assert_awaited_once()
+    bot.send_message.assert_not_awaited()
+    assert (await gateway.store.one("SELECT state FROM outbox ORDER BY id LIMIT 1"))["state"] == "uncertain"
+
+
+@pytest.mark.parametrize("topic,message,chat", [(56, 456, -1), (55, 999, -1), (55, 456, -2)])
+async def test_callbacks_cannot_sign_other_chat_topic_or_message(setup, topic, message, chat):
+    gateway, reviews, bot, key = setup
+    await gateway.deliver(bot)
+    await gateway.handle(click(key, topic=topic, message=message, chat=chat), SimpleNamespace(bot=bot))
+    reviews.documents.sign.assert_not_awaited()
+    gateway.agent.handle.assert_not_awaited()
+
+
+async def test_restart_can_still_sign_existing_notice(setup):
+    gateway, reviews, bot, key = setup
+    await gateway.deliver(bot)
+    restarted = ReviewPackets(gateway.store, reviews.documents, gateway.settings)
+    gateway.reviews = restarted
+    await gateway.recover(bot)
+    await gateway.handle(click(key), SimpleNamespace(bot=bot))
+    assert "已看過：@reader_8" in bot.edit_message_text.call_args.kwargs["text"]
+    bot.send_document.assert_awaited_once()
+
+
+async def test_simultaneous_readers_do_not_overwrite_notice_names(setup):
+    gateway, _reviews, bot, key = setup
+    await gateway.deliver(bot)
+    await asyncio.gather(*[gateway.handle(click(key, user=i), SimpleNamespace(bot=bot)) for i in (8, 9, 10)])
+    text = bot.edit_message_text.call_args.kwargs["text"]
+    assert all(f"@reader_{i}" in text for i in (8, 9, 10))
+
+
+async def test_crash_after_sent_receipt_recovers_button_binding(setup):
+    gateway, _reviews, bot, key = setup
+    await gateway.deliver(bot)
+    await gateway.store.execute("DELETE FROM review_messages")
+    await gateway.recover(bot)
+    await gateway.handle(click(key), SimpleNamespace(bot=bot))
+    assert "已看過：@reader_8" in bot.edit_message_text.call_args.kwargs["text"]
+    bot.send_document.assert_awaited_once()
+
+
+async def test_google_signature_failure_reports_error_without_false_read_receipt(setup):
+    gateway, reviews, bot, key = setup
+    await gateway.deliver(bot)
+    reviews.documents.sign.side_effect = ValueError("找不到簽到欄位")
+    await gateway.handle(click(key), SimpleNamespace(bot=bot))
+    assert "簽到尚未完成" in bot.send_message.call_args.kwargs["text"]
+    assert await gateway.store.all("SELECT * FROM review_reads") == []
+    bot.edit_message_text.assert_not_awaited()
+
+
+async def test_pdf_review_receipt_is_recovered_after_event_crash(setup):
+    gateway, _reviews, bot, key = setup
+    packet = await gateway.reviews.get(key)
+    await gateway.store.execute("DELETE FROM outbox")
+    await gateway.store.execute("UPDATE events SET state='running' WHERE id='event'")
+    await gateway.store.operation(key, "event", -1, 7, "review", {"iid": 678})
+    await gateway.store.finish(key, {"iid": 678, "notification": packet["notice"], "review_id": key})
+    await gateway.recover(bot)
+    bot.send_document.assert_awaited_once()
+    notices = [c.kwargs for c in bot.send_message.call_args_list if c.kwargs.get("reply_markup")]
+    assert len(notices) == 1 and "已看過：尚無" in notices[0]["text"]
+    await gateway.handle(click(key), SimpleNamespace(bot=bot))
+    assert "已看過：@reader_8" in bot.edit_message_text.call_args.kwargs["text"]

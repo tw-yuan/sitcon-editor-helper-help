@@ -6,7 +6,7 @@ import logging
 import re
 import time
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyParameters
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, ReplyParameters
 from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TelegramError
 
 from .agent.context import trim_history
@@ -24,7 +24,7 @@ HELP = """我是編輯組小石。可以 @我、叫「小石」，或回覆我�
 • 小石，開文案卡「報名開跑」，到期日 10/15
 • 小石，列出尚未關閉的卡片
 • 小石，把 #123 指派給 @username
-• review #123 #124：送審並標註總副召
+• review #123 #124：送審、文案 PDF 與簽到，並標註總副召
 • 小石，把 #123 改為 Doing
 • 小石，記住本群文案習慣使用全形標點
 • 小石，列出本群記憶
@@ -59,9 +59,10 @@ def split_plain(text: str, limit: int = 3800) -> list[str]:
 
 
 class Gateway:
-    def __init__(self, settings, store, agent, editorial, roster, knowledge):
+    def __init__(self, settings, store, agent, editorial, roster, knowledge, *, reviews=None):
         self.settings, self.store, self.agent = settings, store, agent
         self.editorial, self.roster, self.knowledge = editorial, roster, knowledge
+        self.reviews = reviews
         self.retry_at = 0.0
         self.sessions = {}
         self.questions = Questions(getattr(settings, "context_ttl_seconds", 1800))
@@ -88,7 +89,8 @@ class Gateway:
         async with self.store.lock:
             try:
                 await self.store.conn.execute("BEGIN IMMEDIATE")
-                for ordinal, (text, mode) in enumerate(messages):
+                for ordinal, item in enumerate(messages):
+                    body = item if isinstance(item, dict) else {"text": item[0], "parse_mode": item[1]}
                     await self.store.conn.execute(
                         "INSERT OR IGNORE INTO outbox(event_id,ordinal,chat_id,thread_id,reply_to,body) "
                         "VALUES (?,?,?,?,?,?)",
@@ -100,8 +102,7 @@ class Gateway:
                             reply_to,
                             json.dumps(
                                 {
-                                    "text": text,
-                                    "parse_mode": mode,
+                                    **body,
                                     "completion_reaction": completion_reaction,
                                     "reaction_message_id": reaction_message_id,
                                     "question_token": question_token if ordinal == len(messages) - 1 else None,
@@ -117,6 +118,16 @@ class Gateway:
             except Exception:
                 await self.store.conn.rollback()
                 raise
+
+    def notice_messages(self, notices, receipts):
+        packets = {r["notification"]: r["review_id"] for r in receipts if r.get("review_id")}
+        messages = []
+        for notice in notices:
+            if self.reviews and (key := packets.get(notice)):
+                messages.extend([{"kind": "review_pdf", "review_id": key}, {"kind": "review_notice", "review_id": key}])
+            else:
+                messages.append((notice, "HTML"))
+        return messages
 
     async def deliver(self, bot, *, event=None, row_id=None):
         if time.monotonic() < self.retry_at:
@@ -134,29 +145,60 @@ class Gateway:
         for row in rows:
             if not await self.store.one("SELECT 1 FROM authorized_groups WHERE chat_id=?", (row["chat_id"],)):
                 continue
+            body = json.loads(row["body"])
+            if body.get("kind") == "review_notice":
+                pdf_sent = await self.store.one(
+                    "SELECT 1 FROM outbox WHERE event_id=? AND state='sent' "
+                    "AND json_extract(body,'$.kind')='review_pdf' AND json_extract(body,'$.review_id')=?",
+                    (row["event_id"], body["review_id"]),
+                )
+                if not pdf_sent:
+                    continue
             # Mark before sending. A crash/timeout is ambiguous: never blindly resend.
             if not await self.store.claim_delivery(row["id"]):
                 continue
-            body = json.loads(row["body"])
+            common = {
+                "chat_id": row["chat_id"],
+                "message_thread_id": row["thread_id"],
+                "reply_parameters": ReplyParameters(row["reply_to"], allow_sending_without_reply=True)
+                if row["reply_to"]
+                else None,
+            }
             try:
-                message = await bot.send_message(
-                    chat_id=row["chat_id"],
-                    message_thread_id=row["thread_id"],
-                    reply_parameters=ReplyParameters(row["reply_to"], allow_sending_without_reply=True)
-                    if row["reply_to"]
-                    else None,
-                    text=body["text"],
-                    parse_mode=body["parse_mode"],
-                    disable_web_page_preview=True,
-                    reply_markup=self.questions.markup(body.get("question_token")),
-                )
+                if body.get("kind") == "review_pdf":
+                    packet = await self.reviews.get(body["review_id"])
+                    message = await bot.send_document(
+                        **common,
+                        document=InputFile(packet["pdf"], filename=packet["filename"]),
+                        caption=(
+                            f"文案 PDF｜#{packet['issue_iid']}\n匯出時間：{packet['created_at']}\n此檔為送審當下版本。"
+                        ),
+                    )
+                elif body.get("kind") == "review_notice":
+                    packet = await self.reviews.get(body["review_id"])
+                    text, markup = await self.reviews.render(packet)
+                    message = await bot.send_message(
+                        **common,
+                        text=text,
+                        parse_mode="HTML",
+                        disable_web_page_preview=True,
+                        reply_markup=markup,
+                    )
+                else:
+                    message = await bot.send_message(
+                        **common,
+                        text=body["text"],
+                        parse_mode=body["parse_mode"],
+                        disable_web_page_preview=True,
+                        reply_markup=self.questions.markup(body.get("question_token")),
+                    )
             except RetryAfter as exc:
                 delay = exc.retry_after
                 self.retry_at = time.monotonic() + (delay.total_seconds() if hasattr(delay, "total_seconds") else delay)
                 await self.store.execute("UPDATE outbox SET state='pending' WHERE id=?", (row["id"],))
                 log.warning("Telegram rate limited; notification id=%s remains pending", row["id"])
                 break
-            except (BadRequest, Forbidden) as exc:
+            except (BadRequest, Forbidden, ValueError) as exc:
                 await self.store.execute("UPDATE outbox SET state='failed' WHERE id=?", (row["id"],))
                 log.warning("Notification rejected id=%s type=%s", row["id"], type(exc).__name__)
             except NetworkError:
@@ -166,6 +208,8 @@ class Gateway:
                 await self.store.execute(
                     "UPDATE outbox SET state='sent',telegram_message_id=? WHERE id=?", (message.message_id, row["id"])
                 )
+                if body.get("kind") == "review_notice":
+                    await self.reviews.bind(body["review_id"], row["chat_id"], message.message_id)
                 sent.append(message.message_id)
                 if question := self.questions.get(body.get("question_token")):
                     self.questions.bind(question.token, message.message_id)
@@ -186,6 +230,13 @@ class Gateway:
         return sent
 
     async def recover(self, bot):
+        if self.reviews:
+            # Rebuild bindings if the previous process stopped after recording delivery.
+            for row in await self.store.all(
+                "SELECT chat_id,telegram_message_id,json_extract(body,'$.review_id') AS review_id "
+                "FROM outbox WHERE state='sent' AND json_extract(body,'$.kind')='review_notice'"
+            ):
+                await self.reviews.bind(row["review_id"], row["chat_id"], row["telegram_message_id"])
         await self.store.execute("UPDATE outbox SET state='uncertain' WHERE state='sending'")
         for event in await self.store.all("SELECT * FROM events WHERE state='running'"):
             ops = await self.store.all("SELECT id,kind,state,result FROM operations WHERE event_id=?", (event["id"],))
@@ -193,7 +244,7 @@ class Gateway:
             for op in ops:
                 result = json.loads(op["result"]) if op["result"] else {}
                 if isinstance(result, dict) and result.get("notification"):
-                    messages.append((result["notification"], "HTML"))
+                    messages.extend(self.notice_messages([result["notification"]], [result]))
             summary = "前次處理途中重新啟動，請查核以下紀錄後接續，避免重複操作。\n"
             for op in ops:
                 summary += f"{op['id']}：{op['kind']}／{op['state']}\n"
@@ -206,6 +257,8 @@ class Gateway:
             messages.extend((chunk, None) for chunk in split_plain(summary))
             await self.stage(event["id"], event["chat_id"], event["thread_id"], event["message_id"], messages)
         await self.deliver(bot)
+        if self.reviews:
+            await self.reviews.refresh(bot)
 
     def conversation(self, chat, message, user, thread):
         now = time.monotonic()
@@ -228,6 +281,40 @@ class Gateway:
             await callback.answer(text=text, show_alert=alert)
         except TelegramError as exc:
             log.debug("Callback acknowledgement failed type=%s", type(exc).__name__)
+
+    async def handle_review(self, update, context):
+        callback, message = update.callback_query, update.effective_message
+        match = re.fullmatch(r"review_(sign|page):([a-f0-9]{24})(?::([0-9]{1,5}))?", callback.data or "")
+        try:
+            if (
+                not self.reviews
+                or not match
+                or (match[1] == "sign" and match[3])
+                or (match[1] == "page" and not match[3])
+            ):
+                raise ValueError("無效的送審按鈕。")
+            packet = await self.reviews.authorize(
+                match[2], update.effective_chat.id, message.message_thread_id, message.message_id
+            )
+        except ValueError as exc:
+            await self.answer_callback(callback, str(exc), alert=True)
+            return
+        await self.answer_callback(callback, "簽到處理中，完成後名單會更新。" if match[1] == "sign" else None)
+        try:
+            async with progress(context.bot, packet["chat_id"], packet["thread_id"], None), self.semaphore:
+                if match[1] == "sign":
+                    await self.reviews.sign(packet, update.effective_user)
+                else:
+                    await self.reviews.set_page(packet, message.message_id, int(match[3]))
+                await self.reviews.refresh(context.bot, packet_id=packet["id"])
+        except Exception as exc:
+            log.exception("Review sign-in failed packet=%s user=%s", packet["id"], update.effective_user.id)
+            await context.bot.send_message(
+                chat_id=packet["chat_id"],
+                message_thread_id=packet["thread_id"],
+                reply_parameters=ReplyParameters(message.message_id, allow_sending_without_reply=True),
+                text=f"簽到尚未完成：{redact(exc)} 請稍後再按一次簽到。",
+            )
 
     async def handle(self, update, context):
         message, chat, user = update.effective_message, update.effective_chat, update.effective_user
@@ -252,6 +339,9 @@ class Gateway:
             return
         choice = None
         if callback:
+            if (callback.data or "").startswith(("review_sign:", "review_page:")):
+                await self.handle_review(update, context)
+                return
             if (callback.data or "").startswith("choose:"):
                 try:
                     choice = self.questions.choose(
@@ -380,8 +470,9 @@ class Gateway:
             rows = await self.store.all(
                 "SELECT result FROM operations WHERE event_id=? AND kind='review' AND state='done'", (event,)
             )
-            notices = list(dict.fromkeys([*result.notices, *[json.loads(r["result"])["notification"] for r in rows]]))
-            messages = [(notice, "HTML") for notice in notices]
+            receipts = [json.loads(r["result"]) for r in rows]
+            notices = list(dict.fromkeys([*result.notices, *[r["notification"] for r in receipts]]))
+            messages = self.notice_messages(notices, receipts)
             messages.extend((chunk, None) for chunk in split_plain(redact(result.reply)))
             completion_reaction = None
             if result.status == "ok":
@@ -420,5 +511,7 @@ class Gateway:
             await asyncio.sleep(15)
             try:
                 await self.deliver(bot)
+                if self.reviews:
+                    await self.reviews.refresh(bot)
             except Exception:
                 log.exception("Pending notification delivery failed")

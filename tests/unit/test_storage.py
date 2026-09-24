@@ -21,6 +21,7 @@ async def test_events_and_migrations_survive_restart(tmp_path):
     assert {r["version"] for r in await db.all("SELECT * FROM schema_migrations")} == {
         "001_initial.sql",
         "002_event_delivery.sql",
+        "003_review_signatures.sql",
     }
     assert len(await db.all("SELECT * FROM group_memories WHERE chat_id=?", (-1,))) == 1
     assert not await db.claim_event("update-1", -1)

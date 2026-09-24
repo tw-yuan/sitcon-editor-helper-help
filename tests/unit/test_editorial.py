@@ -35,9 +35,12 @@ async def tools(tmp_path):
         notes=AsyncMock(return_value=[]),
         comment=AsyncMock(),
     )
-    settings = SimpleNamespace(review_status="Status::Review", default_document_label="社群文案")
+    settings = SimpleNamespace(review_status="Status::Review", default_document_label="社群文案", tz="Asia/Taipei")
     instance = EditorialTools(
         gl, None, SimpleNamespace(get=AsyncMock(return_value=roster)), None, None, store, settings
+    )
+    instance.reviews.documents = SimpleNamespace(
+        export_pdf=AsyncMock(return_value=b"%PDF-1.7\nreview"), sign=AsyncMock()
     )
     yield instance
     await store.close()
@@ -166,3 +169,22 @@ async def test_review_labels_each_available_link_on_its_own_line(tools, document
     tools.gl.update.assert_awaited_once_with(1, add_labels=["Status::Review"])
     saved = await tools.store.one("SELECT result FROM operations WHERE kind='review'")
     assert json.loads(saved["result"])["notification"] == ctx.notices[0]
+
+
+async def test_review_pdf_export_failure_stops_status_updates_for_whole_batch(tools):
+    tools.reviews.documents.export_pdf.side_effect = [b"%PDF-1.7\nfirst", ValueError("PDF 匯出失敗")]
+    with pytest.raises(ValueError, match="PDF"):
+        await tools.review(Review(targets=["1", "2"]), context())
+    tools.gl.update.assert_not_awaited()
+
+
+async def test_review_receipt_records_pdf_packet_and_retry_reuses_snapshot(tools):
+    args, ctx = Review(targets=["1"]), context()
+    await tools.review(args, ctx)
+    await tools.review(args, ctx)
+    receipt = json.loads((await tools.store.one("SELECT result FROM operations WHERE kind='review'"))["result"])
+    packet = await tools.store.one("SELECT * FROM review_packets WHERE id=?", (receipt["review_id"],))
+    assert packet["document_id"] == "doc" and packet["pdf"].startswith(b"%PDF-")
+    assert packet["notice"] == ctx.notices[0]
+    tools.reviews.documents.export_pdf.assert_awaited_once()
+    tools.gl.update.assert_awaited_once()

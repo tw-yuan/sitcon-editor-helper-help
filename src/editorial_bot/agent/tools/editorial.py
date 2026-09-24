@@ -8,7 +8,9 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ...review_packets import ReviewPackets
 from ...services.gitlab import RemoteError
+from ...services.review_documents import ReviewDocuments
 from ...services.workflow import operation_key, resource_links
 from .base import Tool
 from .external_data import wrap_external
@@ -149,6 +151,7 @@ class EditorialTools:
     def __init__(self, gitlab, google, roster, knowledge, workflow, store, settings):
         self.gl, self.google, self.roster, self.knowledge = gitlab, google, roster, knowledge
         self.workflow, self.store, self.settings = workflow, store, settings
+        self.reviews = ReviewPackets(store, ReviewDocuments(google), settings)
 
     async def once(self, kind, payload, ctx, execute, *, repeat_safe=False):
         key = operation_key(ctx.event_id, kind, payload)
@@ -383,13 +386,19 @@ class EditorialTools:
             notice += "\n".join(f"{label}：{html.escape(url)}" for label, url in links)
             if missing:
                 notice += "\n無 Telegram 對照，未能標註：" + html.escape("、".join(missing))
-            prepared.append((issue, notice))
+            review_id = None
+            if docs:
+                document_id = re.search(r"/document/d/([A-Za-z0-9_-]+)", docs[0])[1]
+                review_id = await self.reviews.prepare(
+                    operation_key(ctx.event_id, "review", {"iid": issue["iid"]}), ctx, issue, document_id, notice
+                )
+            prepared.append((issue, notice, review_id))
         results = []
-        for issue, notice in prepared:
+        for issue, notice, review_id in prepared:
 
-            async def execute(_key, iid=issue["iid"], text=notice):
+            async def execute(_key, iid=issue["iid"], text=notice, packet_id=review_id):
                 await self.gl.update(iid, add_labels=[self.settings.review_status])
-                return {"iid": iid, "notification": text, "status": "review"}
+                return {"iid": iid, "notification": text, "status": "review", "review_id": packet_id}
 
             try:
                 result = await self.once("review", {"iid": issue["iid"]}, ctx, execute, repeat_safe=True)

@@ -120,7 +120,7 @@ def run(settings):
             thinking=settings.llm_thinking,
             max_iterations=settings.llm_max_tool_iterations,
         )
-        gateway = Gateway(settings, store, agent, editorial, roster, knowledge)
+        gateway = Gateway(settings, store, agent, editorial, roster, knowledge, reviews=editorial.reviews)
         app.bot_data.update(gateway=gateway, store=store, gitlab=gl)
         await google.preflight()
         await roster.get()
@@ -166,7 +166,7 @@ def run(settings):
         .build()
     )
     app.add_handler(MessageHandler(filters.TEXT & ~filters.UpdateType.EDITED_MESSAGE, receive))
-    app.add_handler(CallbackQueryHandler(receive, pattern="^(?:mention_editors$|choose:)"))
+    app.add_handler(CallbackQueryHandler(receive, pattern="^(?:mention_editors$|choose:|review_sign:|review_page:)"))
     app.add_error_handler(error)
     app.run_polling(allowed_updates=[Update.MESSAGE, Update.CALLBACK_QUERY], drop_pending_updates=False)
 

@@ -43,7 +43,9 @@ class PromptBuilder:
    開卡 labels 留空會帶文案／任務分類及 Status::Inbox；年度／活動只在使用者指定時加入。
 7. 改狀態用 gitlab_update_issue.status；Review／審稿／送審用 review_cards，必須列出所有指定卡。
    Review 是待審狀態，仍屬未關閉卡片。Report 不等於關閉；只有明確要求關閉才能 close。
-   review_cards 與 mention_editors 會由系統直接送出標註通知，不要在文字回覆重複標註人員。
+   review_cards 會由系統送出文案 PDF 與含簽到按鈕的通知；mention_editors 會送出標註通知，
+   不要在一般回覆重複標註人員。簽到只能由本人按按鈕，不能代簽，也不代表審稿通過。
+   PDF 是送審當下的版本；修改 Google Docs 後需重新 review 才會提供新版 PDF。
 8. 裸 review 若有引用卡片，可取卡號／連結；沒有任何卡片目標時 ask_user，不能任選一張。
 9. 編輯 description 時保留既有重要內容；工具會保留資料夾與文案連結。改卡名／日期不會更名文件。
 10. 查未完成工作用 gitlab_search_issues(open_only=true)，包含 Review，不可擅自排除。
