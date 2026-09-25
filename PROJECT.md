@@ -56,7 +56,7 @@ SQLite：授權、群組記憶、事件、操作步驟、資源對照、通知�
 | 成員、Telegram／GitLab 對照、預設負責人、總副召 | 指定 Google Sheet 的 `gid=0` | 快取 300 秒；不從 Wiki 舊名單推斷。 |
 | 可用 label、卡片狀態與內容 | `sitcon-tw/editorial/board` | 操作前查證既有 label，操作後讀回。 |
 | 編輯規範與參考連結 | GitLab Wiki | 快取 900 秒；回答附來源，文件過長可分段讀取。 |
-| 文案與附件 | 指定 Drive 根目錄與 Docs 範本 | 新卡各自擁有 `MMDD_TITLE` 子資料夾。 |
+| 文案與附件 | 指定 Drive 根目錄與 Docs 範本 | 選擇建立文案的卡片各自擁有 `MMDD_TITLE` 子資料夾。 |
 | 群組慣例 | 使用者明確要求保存的本群記憶 | 以 `chat_id` 隔離，持久儲存；不能變更權限。 |
 | 公開、時效資訊 | 獨立網路搜尋 | 附來源，不傳內部卡片或完整名冊作為查詢。 |
 
@@ -88,23 +88,25 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 
 ## 開卡資料流
 
+`create_card.document` 預設為 `false`，一般開卡僅建立 GitLab Issue。使用者明確要求文案卡或開卡並建立文案時才設為 `true`，啟用 Drive 資料夾與 Docs 建立。這個選擇由使用者的操作需求決定，不以標題或 label 猜測；兩種模式仍使用 Sheets 名冊查核負責人。
+
 1. 使用者提供標題與明確到期日。支援獨立四位數 MMDD；「小石開卡 0925 test」直接解析為當年 09/25 到期、標題 test，無需補問。MMDD 使用真實日曆驗證，卡號及較長識別碼不當作日期。缺年份用台灣當前年份；相對日期補問。日期必須真實存在，也必須出現在使用者的指令／續接脈絡中。
 2. 將指定 Telegram username 對應名冊 GitLab ID；未指定時採唯一 `default=yes`，回覆明示。
 3. 驗證所有 label 已存在。未指定 label 時，文案卡套 `社群文案`、任務卡套 `編輯組專案`；沒有指定狀態時加 `Status::Inbox`。不自動加年度 label。
-4. 預檢固定根目錄的 Shared Drive 屬性與建立權限；文案卡再檢查範本可複製、必要欄位存在。
-5. 在固定根目錄建立到期日 `MMDD_TITLE` 資料夾；文案卡複製範本到其中，名稱也使用 `MMDD_TITLE`。
-6. 建立 GitLab Issue。description 包含資料夾連結、可選文案連結、建立者及操作識別；資料夾、文案、建立者以空行分段，避免 GitLab 將一般換行合併顯示。
+4. 僅開卡略過所有 Drive／Docs 呼叫。建立文案時才預檢 Shared Drive 根目錄、建立權限、範本可複製及必要欄位。
+5. 建立文案時，在固定根目錄建立到期日 `MMDD_TITLE` 資料夾並複製範本到其中，文件名稱同為 `MMDD_TITLE`。
+6. 建立 GitLab Issue。description 包含原說明、建立者及操作識別；只有實際存在的資料夾／文案才加入連結。各項以空行分段，避免 GitLab 將一般換行合併顯示。
 7. 讀回 Issue，驗證 labels 與所有負責人。GitLab 若不接受多人，不把部分成功說成全部成功。
-8. 在文案填入 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK`，並設定兩個 URL 為可點擊連結。保留其他範本正文。
-9. 保存 Issue／資料夾／文件對照，回覆實際網址與操作 ID。
+8. 若有建立文案，在文件填入 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK`，並設定兩個 URL 為可點擊連結。保留其他範本正文。
+9. 保存 Issue／資料夾／文件對照，回覆實際網址與操作 ID；僅開卡的 `folder_id`、`document_id` 與對應 URL 為空值，不產生空連結。
 
 建立者由程式依 Telegram 數字 ID（優先）或精確 username 查名冊，再用 GitLab ID 查實際 username，寫入 `建立者：@username`，不由模型猜帳號，也不取負責人當建立者。名冊無對應或 GitLab 回 404 才回退為 `Telegram：` 加不會觸發 GitLab mention 的 username 純顯示；無 Telegram username 則顯示 Telegram ID。GitLab 權限、限流、連線等查詢錯誤不視為沒有帳號，會在建立資源前停止。GitLab Issue 的系統作者仍是執行 API 的 service account，描述內另行標註真正提出開卡需求的人。
 
-資料夾每張卡獨立，不以名稱查找合併：相同 `MMDD_TITLE` 仍可能是不同年度或不同工作。重試以操作識別及 Drive `appProperties` 對應資源。非文案卡同樣有資料夾，但不建立 Docs。
+建立文案時，每張卡的資料夾獨立，不以名稱查找合併：相同 `MMDD_TITLE` 仍可能是不同年度或不同工作。重試以操作識別及 Drive `appProperties` 對應資源。既有卡片的資料夾不會刪除；接續舊版純任務操作時，保留 checkpoint 內已建立的資料夾，不再呼叫 Drive。若舊版 Drive 寫入仍為結果不明，停止並要求人工查核，不跳過未知步驟後直接開新卡。
 
 ## 失敗與重試
 
-開卡是跨 Google／GitLab 的分步流程，不是原子交易。每次新增前先記錄 pending，成功後保存資源 ID。若連線中斷，先用操作識別查找遠端資源；找到則接續，找不到且結果仍不明則停下，避免盲目重建。
+建立文案是跨 Google／GitLab 的分步流程，不是原子交易；僅開卡只執行 GitLab 步驟。每次新增前先記錄 pending，成功後保存資源 ID。若連線中斷，先用操作識別查找遠端資源；找到則接續，找不到且結果仍不明則停下，避免盲目重建。
 
 失敗回覆會列出操作 ID、完成步驟與已知連結。使用者可要求 `接續操作 ID`，只允許原操作者在原群接續。不會自動刪除已建立資源。相同 Telegram update 不再執行；同輪相同工具參數有持久收據，開卡未完成時也不能以不同參數另開一份。
 
@@ -120,7 +122,7 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 
 ## PDF 快照與多人簽到
 
-使用者選定的呈現方式是「PDF 附件＋獨立簽到通知」。採兩則訊息是因 Telegram PDF caption 上限 1,024 字，獨立文字通知可保留三種連結及多人名單。PDF 先確認送達才送出對應簽到通知；PDF 送達結果不明時不盲目重送，也不先發出該份簽到按鈕。純任務卡沒有文案時沿用文字通知。
+使用者選定的呈現方式是「PDF 附件＋獨立簽到通知」。採兩則訊息是因 Telegram PDF caption 上限 1,024 字，獨立文字通知可保留三種連結及多人名單。PDF 先確認送達才送出對應簽到通知；PDF 送達結果不明時不盲目重送，也不先發出該份簽到按鈕。純任務卡沒有文案時沿用文字通知；已知僅開卡紀錄優先於標題／label 的文案推測，避免把「文案規劃」等任務誤判為缺少文件。後來手動附上的文件連結仍可送審。
 
 `ReviewDocuments` 使用 Google Drive 的 `files.export` 取得完整 Docs PDF，沒有另建 Drive 檔案，也不提供公開下載端點；最大 10 MB，檢查 PDF 檔頭。匯出及簽到都先核對 Google 文件位於核准根目錄或直接子資料夾，以及 service account 的編輯／下載能力。每次 review 以操作識別保存快照，同輪重試沿用相同 PDF；不同 review 產生新的快照與各自的已讀名單。顯示匯出時間並提醒文件修改後需重新 review，避免把舊 PDF 當成最新文案。
 
@@ -189,7 +191,7 @@ Agent 文字原本即以 `parse_mode=None` 發送；補問選項改用「選項 
 
 ## 儲存與 migration
 
-`migrations/001_initial.sql` 建立授權、群組記憶、operations、resources、events、outbox、audit_log。`002_event_delivery.sql` 增加中斷事件恢復所需的 topic、操作者與訊息 ID。`003_review_signatures.sql` 新增 PDF 快照、文件簽名、各次已讀名單與訊息更新表。啟動時以 `schema_migrations` 追蹤並依序套用，交易失敗會 rollback。
+`migrations/001_initial.sql` 建立授權、群組記憶、operations、resources、events、outbox、audit_log。`002_event_delivery.sql` 增加中斷事件恢復所需的 topic、操作者與訊息 ID。`003_review_signatures.sql` 新增 PDF 快照、文件簽名、各次已讀名單與訊息更新表。`004_optional_card_resources.sql` 在同一交易中複製既有資源對照並重建表，讓 `folder_id` 可為空值；保留全部舊資料與主鍵，讓僅開卡也有明確資源紀錄，供改卡及送審判斷。啟動時以 `schema_migrations` 追蹤並依序套用，交易失敗會 rollback。
 
 SQLite 使用 WAL。備份必須採 SQLite backup API 或停機後完整備份資料，不單獨複製運作中的主檔。不要刪除 events／operations 作為「清快取」，否則會失去去重與接續依據。
 

@@ -14,8 +14,12 @@ def operation_key(event: str, kind: str, payload: dict) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
-def resource_links(folder_id: str, document_id: str | None) -> str:
-    lines = ["<!-- editorial-resources:start -->", f"資料夾：https://drive.google.com/drive/folders/{folder_id}"]
+def resource_links(folder_id: str | None, document_id: str | None) -> str:
+    if not folder_id and not document_id:
+        return ""
+    lines = ["<!-- editorial-resources:start -->"]
+    if folder_id:
+        lines.append(f"資料夾：https://drive.google.com/drive/folders/{folder_id}")
     if document_id:
         lines.append(f"文案：https://docs.google.com/document/d/{document_id}/edit")
     lines.append("<!-- editorial-resources:end -->")
@@ -54,9 +58,7 @@ class CardWorkflow:
                 return json.loads(op["result"])
             steps = op["steps"]
             labels = await self.gitlab.validate_labels(payload["labels"], required=True)
-            await self.google.preflight(payload["document"])
             marker = f"editorial-operation:{key}"
-            name = folder_name(payload["title"], payload["due_date"])
 
             async def step(kind, find, create):
                 if kind in steps:
@@ -83,18 +85,24 @@ class CardWorkflow:
                 return result
 
             try:
-                folder = await step(
-                    "folder",
-                    lambda: self.google.find_resource(self.settings.drive_root_folder_id, key, "folder"),
-                    lambda: self.google.create_folder(name, key),
-                )
+                # Preserve already-created folders when resuming a task from the old workflow.
+                folder = steps.get("folder")
                 doc = None
                 if payload["document"]:
+                    await self.google.preflight(True)
+                    name = folder_name(payload["title"], payload["due_date"])
+                    folder = await step(
+                        "folder",
+                        lambda: self.google.find_resource(self.settings.drive_root_folder_id, key, "folder"),
+                        lambda: self.google.create_folder(name, key),
+                    )
                     doc = await step(
                         "document",
                         lambda: self.google.find_resource(folder["id"], key, "document"),
                         lambda: self.google.copy_template(folder["id"], name, key),
                     )
+                elif steps.get("pending") in {"folder", "document"}:
+                    raise ValueError("舊版 Drive 寫入結果仍不明，請人工查核既有資源後再接續。")
 
                 async def find_issue():
                     matches = await self.gitlab.search(state="all", search=marker, **{"in": "description"})
@@ -107,7 +115,7 @@ class CardWorkflow:
                     x
                     for x in [
                         payload.get("description", ""),
-                        resource_links(folder["id"], doc["id"] if doc else None),
+                        resource_links(folder["id"] if folder else None, doc["id"] if doc else None),
                         f"建立者：{payload['requester']}",
                         f"<!-- {marker} -->",
                     ]
@@ -133,7 +141,7 @@ class CardWorkflow:
                     raise ValueError("卡片已建立，但負責人未完整套用；請檢查名冊及專案指派限制。")
                 await self.store.execute(
                     "INSERT OR REPLACE INTO resources(issue_iid,folder_id,document_id,operation_id) VALUES (?,?,?,?)",
-                    (issue["iid"], folder["id"], doc["id"] if doc else None, key),
+                    (issue["iid"], folder["id"] if folder else None, doc["id"] if doc else None, key),
                 )
                 if doc and not steps.get("document_filled"):
                     # Replacing the same template tokens is idempotent; safe to resume after a timeout.
@@ -147,7 +155,7 @@ class CardWorkflow:
                     "iid": issue["iid"],
                     "title": issue["title"],
                     "issue_url": issue["web_url"],
-                    "folder_url": f"https://drive.google.com/drive/folders/{folder['id']}",
+                    "folder_url": f"https://drive.google.com/drive/folders/{folder['id']}" if folder else None,
                     "document_url": f"https://docs.google.com/document/d/{doc['id']}/edit" if doc else None,
                     "due_date": payload["due_date"],
                     "assignee_ids": payload["assignee_ids"],

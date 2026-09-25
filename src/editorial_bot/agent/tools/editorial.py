@@ -31,7 +31,10 @@ class Person(Args):
 class Create(Args):
     title: str = Field(min_length=1, max_length=255)
     due_date: str = Field(description="使用者明確指定日期轉成 YYYY-MM-DD；未給年份用台灣當前年份。")
-    document: bool = Field(True, description="文案卡為 true；圖片卡、純任務或不需文案為 false。")
+    document: bool = Field(
+        False,
+        description="預設 false，僅建 GitLab 卡片；明確要求文案卡或建立文案才為 true，建立 Drive 資料夾與 Docs。",
+    )
     description: str = ""
     labels: list[str] = Field(default_factory=list, description="精確使用既有 label；空值採文案／任務預設分類。")
     assignee_ids: list[int] = Field(default_factory=list, description="名冊 GitLab ID；空值使用唯一 default=yes。")
@@ -312,7 +315,9 @@ class EditorialTools:
                 blocks = re.findall(r"<!-- editorial-resources:start -->.*?<!-- editorial-resources:end -->", old, re.S)
                 resource = await self.store.one("SELECT * FROM resources WHERE issue_iid=?", (args.iid,))
                 if not blocks and resource:
-                    blocks = [resource_links(resource["folder_id"], resource["document_id"])]
+                    links = resource_links(resource["folder_id"], resource["document_id"])
+                    if links:
+                        blocks = [links]
                 if not blocks:
                     blocks = re.findall(
                         r"https://(?:docs\.google\.com/document/d/|drive\.google\.com/[^\s<]*)[^\s<]*", old
@@ -362,10 +367,15 @@ class EditorialTools:
                 r"https://drive\.google\.com/(?:drive/(?:u/\d+/)?folders/|folders/)[A-Za-z0-9_-]+", text
             )
             if resource:
-                folders = [f"https://drive.google.com/drive/folders/{resource['folder_id']}"]
+                if resource["folder_id"]:
+                    folders = [f"https://drive.google.com/drive/folders/{resource['folder_id']}"]
                 if resource["document_id"]:
                     docs = [f"https://docs.google.com/document/d/{resource['document_id']}/edit"]
-            if not docs and (self.settings.default_document_label in issue["labels"] or "文案" in issue["title"]):
+            if (
+                not docs
+                and resource is None
+                and (self.settings.default_document_label in issue["labels"] or "文案" in issue["title"])
+            ):
                 raise ValueError(f"#{issue['iid']} 找不到文案連結，請補上再送審。")
             authors = []
             missing = []
@@ -495,7 +505,10 @@ class EditorialTools:
                 "resolve_member", "用 Telegram username 或我查詢編輯組名冊身分。", Person, self.resolve_member
             ),
             FunctionTool(
-                "create_card", "開卡並建立 MMDD_TITLE 資料夾與選用的範本文案；只用既有 label。", Create, self.create
+                "create_card",
+                "開卡：預設僅建立 GitLab 卡片；明確要求建立文案才建立 MMDD_TITLE 資料夾與範本 Docs。只用既有 label。",
+                Create,
+                self.create,
             ),
             FunctionTool("resume_operation", "接續自己在本群未完成的開卡操作。", Resume, self.resume),
             FunctionTool("gitlab_get_issue", "讀取卡片、關聯卡及選用人工留言。", Issue, self.get),

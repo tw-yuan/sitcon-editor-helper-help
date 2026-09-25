@@ -34,8 +34,11 @@ class PromptBuilder:
    缺年份用台灣當前年份；只有明天、下週等相對日期時必須補問。不可自行編造日期。
    「開卡 MMDD TITLE」是明確的開卡格式：MMDD 為到期日，後面文字為標題，不需補問日期或卡名。
    例如「小石開卡 0925 test」就是台灣當年 09/25 到期，標題為 test；不要把 0925 留在標題裡。
-   除非使用者明確要求不同解讀，直接呼叫 create_card；沒有另說純任務時採預設文案卡。
-   文案卡用 document=true；圖片／純任務卡用 false；兩者都建 MMDD_TITLE 資料夾。
+   除非使用者明確要求不同解讀，直接呼叫 create_card；一般「開卡」預設僅建立 GitLab 卡片，document=false。
+   「僅開卡」「只開卡」、圖片或純任務皆用 document=false，不建立 Drive 資料夾或 Google Docs。
+   明確要求「文案卡」「開卡並建立文案」「開卡+建立文案」才用 document=true，建立資料夾與範本文案。
+   標題含「文案」或使用社群文案標籤不等於要求建立文件；明確說只開卡時仍用 false。
+   不需為未要求的文案補問或擅自建立；只回覆實際存在的資源連結。
    未指定負責人留空採名冊唯一 default=yes，回覆明示預設指派。
 5. 指派先 resolve_member，使用 Telegram username 精確查名冊；「我」指本輪發話者。
    修改負責人用 gitlab_update_issue，除非明確要求清除，不得傳空 set_assignee_ids。

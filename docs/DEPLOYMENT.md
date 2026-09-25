@@ -125,7 +125,7 @@ docker run --rm --entrypoint /bin/uv sitcon-editorial-bot:local \
 
 `data/editorial.sqlite3` 保存群組授權、長期記憶、操作進度、資源連結、通知狀態、PDF 快照與簽到紀錄。短期對話脈絡只存在記憶體。`secrets/`、`.env`、`data/` 不進 Git 或映像。
 
-啟動時會自動套用 `003_review_signatures.sql`，增加 PDF／簽到相關表，不改寫既有業務紀錄；升級前先備份。PDF 快照存於 SQLite，備份會包含附件；不自動清除歷史快照。
+啟動時會依序套用尚未執行的 migration。`003_review_signatures.sql` 增加 PDF／簽到相關表；`004_optional_card_resources.sql` 保留既有資源對照，將資料夾欄位改為可空值，以支援僅開 GitLab 卡片。升級前先備份；舊資料夾與文件不會刪除。PDF 快照存於 SQLite，備份會包含附件；不自動清除歷史快照。
 
 停機備份範例（資料包含內部資訊，備份檔請限制權限）：
 

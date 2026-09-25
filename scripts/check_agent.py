@@ -113,23 +113,31 @@ async def main():
         assert not attempted_writes, f"意外要求寫入工具：{attempted_writes}"
         # Inspect the live model's proposed arguments only. Never execute these tool calls.
         create = next(tool for tool in tools if tool.name == "create_card")
-        compact = await build_llm_client(settings).chat(
-            system=await PromptBuilder(settings, store).build(chat_id=-1),
-            messages=[Message("user", [TextBlock("小石開卡 0925 test")])],
-            tools=[create.spec(), ASK_USER_SPEC],
-            thinking=settings.llm_thinking,
-        )
-        assert len(compact.tool_calls) == 1 and compact.tool_calls[0].name == "create_card", "MMDD 格式不應補問"
-        parsed = create.args_model.model_validate(compact.tool_calls[0].arguments)
         expected_date = f"{datetime.now(ZoneInfo(settings.tz)).year}-09-25"
-        assert parsed.title == "test" and parsed.due_date == expected_date, "MMDD 到期日或標題解析錯誤"
-        validate_explicit_date("小石開卡 0925 test", parsed.due_date, settings.tz)
+        cases = [
+            ("小石開卡 0925 test", "test", False),
+            ("小石，僅開卡 0925 文案規劃，不需要文件", "文案規劃", False),
+            ("小石，開卡並建立文案 0925 test", "test", True),
+        ]
+        for text, title, document in cases:
+            compact = await build_llm_client(settings).chat(
+                system=await PromptBuilder(settings, store).build(chat_id=-1),
+                messages=[Message("user", [TextBlock(text)])],
+                tools=[create.spec(), ASK_USER_SPEC],
+                thinking=settings.llm_thinking,
+            )
+            assert len(compact.tool_calls) == 1 and compact.tool_calls[0].name == "create_card", "MMDD 格式不應補問"
+            parsed = create.args_model.model_validate(compact.tool_calls[0].arguments)
+            assert parsed.title == title and parsed.due_date == expected_date, "MMDD 到期日或標題解析錯誤"
+            assert parsed.document is document, f"開卡模式解析錯誤：{text}"
+            validate_explicit_date(text, parsed.due_date, settings.tz)
         print(
             json.dumps(
                 {
                     "live_label_tool_call": True,
                     "relative_date_asks_user": True,
                     "compact_date_and_title": True,
+                    "card_only_and_document_modes": True,
                     "consent_button_options": True,
                     "plain_text_replies": True,
                     "remote_writes": 0,

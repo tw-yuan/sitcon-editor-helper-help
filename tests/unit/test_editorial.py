@@ -188,3 +188,40 @@ async def test_review_receipt_records_pdf_packet_and_retry_reuses_snapshot(tools
     assert packet["notice"] == ctx.notices[0]
     tools.reviews.documents.export_pdf.assert_awaited_once()
     tools.gl.update.assert_awaited_once()
+
+
+@pytest.mark.parametrize("document", [None, False, True])
+async def test_create_mode_defaults_to_card_only_and_selects_matching_labels(tools, document):
+    args, ctx = await prepare_create(tools)
+    if document is not None:
+        args.document = document
+    await tools.create(args, ctx)
+    payload = tools.workflow.create.call_args.args[0]
+    assert payload["document"] is (document is True)
+    assert payload["labels"] == ["社群文案" if document else "編輯組專案", "Status::Inbox"]
+
+
+async def test_card_only_review_does_not_infer_document_from_title_or_label(tools):
+    issue = await tools.gl.resolve("1")
+    issue.update(title="文案規劃", description="僅開卡")
+    tools.gl.resolve.side_effect = None
+    tools.gl.resolve.return_value = issue
+    await tools.store.execute("INSERT INTO resources VALUES (1,NULL,NULL,'card-only')")
+    ctx = context()
+    await tools.review(Review(targets=["1"]), ctx)
+    assert ctx.notices[0].splitlines()[1:] == [f"卡片：{issue['web_url']}"]
+    tools.reviews.documents.export_pdf.assert_not_awaited()
+    tools.gl.update.assert_awaited_once_with(1, add_labels=["Status::Review"])
+
+
+async def test_card_only_description_update_preserves_marker_without_empty_resource_links(tools):
+    from editorial_bot.agent.tools.editorial import Update
+
+    marker = "<!-- editorial-operation:abc123 -->"
+    tools.gl.get = AsyncMock(return_value={"labels": [], "description": "舊內容\n" + marker})
+    tools.gl.update.return_value = {"labels": [], "web_url": "https://gitlab.com/p/-/issues/1"}
+    await tools.store.execute("INSERT INTO resources VALUES (1,NULL,NULL,'abc123')")
+    await tools.update(Update(iid=1, description="新內容"), context())
+    description = tools.gl.update.call_args.kwargs["description"]
+    assert description == "新內容\n\n" + marker
+    assert "editorial-resources" not in description and "None" not in description

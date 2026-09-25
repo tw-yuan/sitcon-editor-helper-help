@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,13 +77,25 @@ async def test_ambiguous_write_is_not_repeated_if_resource_not_found(setup):
     google.create_folder.assert_awaited_once()
 
 
-async def test_task_card_creates_folder_without_document(setup):
-    workflow, google, _gitlab, _store, ctx, payload = setup
+async def test_task_card_only_creates_gitlab_issue_even_if_drive_is_unavailable(setup):
+    workflow, google, gitlab, store, ctx, payload = setup
     payload["document"] = False
+    for method in vars(google).values():
+        method.side_effect = AssertionError("僅開卡不得存取 Drive 或 Docs")
     result = await workflow.create(payload, ctx)
-    assert result["document_url"] is None
-    google.create_folder.assert_awaited_once()
-    google.copy_template.assert_not_awaited()
+    assert result["folder_url"] is None and result["document_url"] is None
+    assert result["issue_url"].endswith("/2")
+    gitlab.create.assert_awaited_once()
+    for method in vars(google).values():
+        method.assert_not_awaited()
+    description = gitlab.create.call_args.args[0]["description"]
+    assert "資料夾：" not in description and "文案：" not in description
+    assert "editorial-resources" not in description
+    assert "建立者：@writer" in description and "editorial-operation:" in description
+    resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
+    assert resource["folder_id"] is None and resource["document_id"] is None
+    assert await workflow.create(payload, ctx) == result
+    gitlab.create.assert_awaited_once()
 
 
 async def test_invalid_labels_stop_before_google_write(setup):
@@ -110,10 +123,56 @@ async def test_resource_links_render_as_separate_paragraphs(setup, document):
     payload.update(document=document, requester="@gitlab_writer", description="原有說明")
     await workflow.create(payload, ctx)
     description = gitlab.create.call_args.args[0]["description"]
-    assert "\n\n資料夾：https://drive.google.com/drive/folders/folder\n\n" in description
     assert "\n\n建立者：@gitlab_writer\n\n" in description
     if document:
+        assert "\n\n資料夾：https://drive.google.com/drive/folders/folder\n\n" in description
         assert "\n\n文案：https://docs.google.com/document/d/doc/edit\n\n" in description
     else:
-        assert "文案：" not in description
+        assert "資料夾：" not in description and "文案：" not in description
     assert description.startswith("原有說明\n\n")
+
+
+async def test_task_card_unknown_gitlab_write_resumes_without_google_or_duplicate_issue(setup):
+    workflow, google, gitlab, store, ctx, payload = setup
+    payload["document"] = False
+    gitlab.create.side_effect = RemoteError("GitLab", None, uncertain=True)
+    with pytest.raises(ValueError, match="操作"):
+        await workflow.create(payload, ctx)
+    op = await store.one("SELECT * FROM operations")
+    assert json.loads(op["steps"])["pending"] == "issue"
+    with pytest.raises(ValueError, match="結果仍不明"):
+        await workflow.create(payload, ctx, resume_id=op["id"])
+    gitlab.search.return_value = [
+        {**gitlab.get.return_value, "description": f"<!-- editorial-operation:{op['id']} -->"}
+    ]
+    result = await workflow.create(payload, ctx, resume_id=op["id"])
+    assert result["folder_url"] is None and result["document_url"] is None
+    gitlab.create.assert_awaited_once()
+    for method in vars(google).values():
+        method.assert_not_awaited()
+
+
+async def test_legacy_task_resume_preserves_existing_folder_without_google_calls(setup):
+    workflow, google, gitlab, store, ctx, payload = setup
+    payload["document"] = False
+    op = await store.operation("legacy-task", ctx.event_id, ctx.chat_id, ctx.user_id, "create_card", payload)
+    await store.checkpoint(op["id"], {"folder": {"id": "old-folder"}}, "error")
+    result = await workflow.create(payload, ctx, resume_id=op["id"])
+    assert result["folder_url"].endswith("/old-folder")
+    assert result["folder_url"] in gitlab.create.call_args.args[0]["description"]
+    assert (await store.one("SELECT folder_id FROM resources"))["folder_id"] == "old-folder"
+    for method in vars(google).values():
+        method.assert_not_awaited()
+
+
+async def test_legacy_task_with_unknown_folder_write_does_not_start_new_steps(setup):
+    workflow, google, gitlab, store, ctx, payload = setup
+    payload["document"] = False
+    op = await store.operation("legacy-unknown", ctx.event_id, ctx.chat_id, ctx.user_id, "create_card", payload)
+    await store.checkpoint(op["id"], {"pending": "folder"}, "uncertain")
+    with pytest.raises(ValueError, match="人工查核"):
+        await workflow.create(payload, ctx, resume_id=op["id"])
+    gitlab.create.assert_not_awaited()
+    assert json.loads((await store.one("SELECT steps FROM operations"))["steps"])["pending"] == "folder"
+    for method in vars(google).values():
+        method.assert_not_awaited()
