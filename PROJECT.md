@@ -15,7 +15,8 @@ Telegram 群組／topic
 Gateway ── /ta、管理指令 ──┐
         │                  │
         ▼                  ▼
-Agent + 主模型        編輯組工具
+Agent + DeepSeek      編輯組工具
+（經 CF AI Gateway）
         │                  │
         ├─ ask_user         ├─ 名冊：Google Sheets（唯一人員來源）
         ├─ 工具參數驗證      ├─ 知識：GitLab Wiki + Wiki 連結的 Google Docs
@@ -41,7 +42,7 @@ SQLite：授權、群組記憶、事件、操作步驟、資源對照、通知�
 | Pydantic Settings／models | 環境變數與工具參數驗證，拒絕額外參數。 |
 | httpx | 固定專案的 GitLab REST API，可測試每一筆請求，不提供任意 API 工具。 |
 | google-api-python-client／google-auth | 直接使用 service account 操作 Sheets、Shared Drive 與 Docs。 |
-| OpenAI／Anthropic SDK | 沿用可替換 provider 的主模型介面；搜尋另有自己的服務與憑證。 |
+| OpenAI／Anthropic SDK | DeepSeek 主模型經 Cloudflare 的 OpenAI 相容端點；Anthropic 搜尋另有自己的服務與憑證。 |
 | SQLite／aiosqlite | 單機部署的授權、持久記憶、開卡步驟及通知紀錄，免額外維護資料庫服務。 |
 | uv／Docker Compose | 鎖定依賴與部署環境；容器 UID/GID 固定為 10001。 |
 | pytest／respx／Ruff | 模擬遠端錯誤與重試，測試容器無網路、無正式憑證。格式沿用來源專案。 |
@@ -198,7 +199,11 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 沒有公開 HTTP API 端點。CLI 有 `--check-services`（唯讀服務檢查）、`--check-ai`（主模型與公開搜尋檢查）。測試容器使用 Compose `test` profile，無網路也不掛載憑證。
 
-部署步驟見 [README.md](README.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證從指定年度 bot 複製到本專案；AI／搜尋設定同樣沿用。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
+部署步驟見 [README.md](README.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證與獨立搜尋設定從指定年度 bot 複製到本專案；DeepSeek 主模型自 2026-09-25 改走使用者指定的 Cloudflare AI Gateway。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
+
+主模型保留 `LLM_PROVIDER=openai_compat`，以 `LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat`、`LLM_MODEL=deepseek/deepseek-flash` 呼叫 `POST https://cf-ai.yuan-tw.net/compat/chat/completions`。`LLM_API_KEY` 保存 Cloudflare token，SDK 以 Bearer 認證；base URL 不包含 `/chat/completions`，避免 SDK 重複附加路徑。模型的 `deepseek/` 前綴用來選擇 gateway provider，上游仍使用 `deepseek-flash`。
+
+這次沿用 Chat Completions 的訊息、function calling 與工具結果往返，不新增 Responses adapter、依賴或資料表。選擇此方式是因為 gateway 與既有 adapter 相容，能以環境設定完成遷移。網路搜尋仍使用獨立 `WEB_SEARCH_*` 設定，不與主模型共用新憑證。Cloudflare token 與該 gateway 的 DeepSeek 路由必須可用；錯誤沿用既有遮蔽憑證的 log 與操作錯誤處理。參考 [Cloudflare 相容端點](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/)。
 
 直接使用 service account 存取 Shared Drive，不使用網域委派。GitLab 帳號須在固定專案有 Developer 權限並能讀 Wiki；Google 帳號須能讀名冊、複製範本及在根目錄建立內容。
 
@@ -219,6 +224,15 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 - GitLab Issue API 的 labels 介面以名稱操作；每次送出前即時檢查存在，但外部管理員同時刪除標籤仍有競態窗口。
 - 短期補問脈絡不跨重啟；需要使用者重新提供上下文。長期群組記憶與操作紀錄會保留。
 
+
+## Cloudflare 切換驗證（2026-09-25）
+
+- 指定的 `https://cf-ai.yuan-tw.net/compat/chat/completions` 實際回應 HTTP 200，`deepseek/deepseek-flash` 可取得文字回覆。
+- 透過 Compose 執行 `--check-ai`，主模型與原有獨立搜尋均成功；搜尋回傳 1 筆來源，沒有工具錯誤。
+- `scripts/check_agent.py` 透過新 gateway 完成查詢實際標籤、工具結果往返、相對日期補問、同意選項、純文字回覆與 MMDD 開卡參數檢查；遠端寫入為 0。
+- 重新建置正式與測試映像，164 項隔離測試、Ruff check 與 format check 全部通過。這次僅調整環境設定及文件，沿用既有測試與 adapter，沒有新增程式邏輯。
+- Compose 已重建正式 bot 容器；確認容器內的 gateway URL／模型設定正確，log 顯示 `Editorial bot ready`、`Application started`，restart count 為 0。
+- `.env` 只有主模型的 API key、base URL、model 三個值變更；搜尋設定不變。憑證僅保存在權限 600 且不進 Git 的 `.env`，切換用暫存檔已移除。
 
 ## 本次交付驗證
 

@@ -1,7 +1,7 @@
 # SITCON 編輯組小助手規格書
 
 - 版本：1.0 實作契約
-- 更新：2026-09-24（UTC）
+- 更新：2026-09-25（UTC）
 - 狀態：實作完成，使用者已明確授權啟動新版並處理待處理 Telegram 更新；額外的人工遠端新增／刪除測試仍須個別確認。
 
 本版取代原待確認草案。使用者已確認「依這次口頭補充開始實作」，並說明新增／刪除確認只限制本次開發查證／測試，不要求未來 Telegram bot 每次操作都再確認。正式啟動前需確認舊 n8n 已停止與 webhook 已解除。
@@ -10,7 +10,7 @@
 
 建立長期編輯組專用 agent，保留 n8n 的開文案卡、純任務卡、未關閉卡片查詢、改負責人、多卡 review 及自然語言觸發。新增全員標註、總副召 review 通知、每卡資料夾、既有標籤、狀態操作、Wiki 知識、網路搜尋及持久群組記憶。
 
-沿用 `/root/sitcon-2027-helper-bot` 的 Google service account、模型與搜尋設定及可重用的介面；人員／知識／卡片資料使用編輯組自己的來源。部署採 Docker Compose。
+沿用 `/root/sitcon-2027-helper-bot` 的 Google service account、搜尋設定及可重用的模型介面；DeepSeek 主模型改經使用者指定的 Cloudflare AI Gateway `https://cf-ai.yuan-tw.net/compat/chat/completions`。人員／知識／卡片資料使用編輯組自己的來源。部署採 Docker Compose。
 
 ## 2. 權威來源與查證
 
@@ -116,7 +116,7 @@ Review 仍為 opened；Report 不自動關卡。明確 close／reopen 由獨立�
 
 - Wiki 查詢提供編輯工作規範與來源連結；可讀 Wiki 連結的 Google Docs 工作手冊，長文分段。
 - Wiki 預設快取 900 秒；讀不到時明示，不拿年度機器人的知識代替。
-- 公開、時效資訊用獨立網路搜尋服務，回覆附來源。主模型與搜尋模型／endpoint／憑證沿用指定來源。
+- 公開、時效資訊用獨立網路搜尋服務，回覆附來源。搜尋模型／endpoint／憑證沿用指定來源；只有 DeepSeek 主模型改走 Cloudflare，使用 `deepseek/deepseek-flash` 與環境變數中的 Cloudflare token。
 - 群組記憶只在使用者明確要求時保存，可列出、刪除；依 chat_id 隔離，最多 30 筆、每筆 500 字，重啟保留。
 - 記憶不能修改權限、固定專案或憑證；不自動記錄日常聊天。
 

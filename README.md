@@ -21,7 +21,7 @@ chmod 600 .env
 
 在 `.env` 填入本專案 Telegram token、管理員數字 ID、GitLab token、主模型與獨立搜尋的憑證及 endpoint。將 Google service account JSON 放到 `secrets/google-sa.json`。
 
-本機已依使用者授權從 `/root/sitcon-2027-helper-bot` 複製 Google JSON 與 AI／搜尋設定；新環境需要自行提供這些值。不要將 `.env` 或 JSON commit。
+本機已依使用者授權從 `/root/sitcon-2027-helper-bot` 複製 Google JSON 與搜尋設定；DeepSeek 主模型改經 Cloudflare AI Gateway。新環境需要自行提供這些值。不要將 `.env` 或 JSON commit。
 
 ```bash
 sudo chown root:10001 secrets/google-sa.json
@@ -33,6 +33,22 @@ sudo chmod 750 data
 Google 帳號須能讀指定名冊、複製範本、在指定 Shared Drive 根資料夾新增內容。本版本直接使用 service account，無網域委派。GitLab 帳號須加入 `sitcon-tw/editorial/board`，具 Developer 權限並可讀 Wiki。
 
 名冊 `gid=0` 必須包含 `Telegram ID`、`gitlab_id`、`Nickname`、`default`、`note`。`Telegram ID` 填 username；`default=yes` 要唯一；總副召在 `note` 標記「總召／副召」。範本文字需要 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK`。
+
+## DeepSeek 與 Cloudflare AI Gateway
+
+主模型使用以下 `.env` 設定，`LLM_API_KEY` 填入 Cloudflare token：
+
+```dotenv
+LLM_PROVIDER=openai_compat
+LLM_MODEL=deepseek/deepseek-flash
+LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat
+LLM_THINKING=off
+LLM_SERVICE_TIER=
+```
+
+SDK 會自動附加 `/chat/completions`，實際請求送至 `https://cf-ai.yuan-tw.net/compat/chat/completions`；不要把完整 endpoint 填進 `LLM_BASE_URL`，也不要額外加 `/v1`。模型名稱包含 `deepseek/` 路由前綴，認證由 SDK 以 `Authorization: Bearer` 傳送；`LLM_AUTH_BEARER` 只影響 Anthropic adapter。這次只切換 DeepSeek，`WEB_SEARCH_*` 維持原本獨立 Anthropic 搜尋服務，沒有改用 Responses API。
+
+沿用現有 adapter 是因為 [Cloudflare 相容端點](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/)支援相同的訊息與工具格式。修改 `.env` 後，先執行下方 AI 檢查，再用 `docker compose up -d bot` 重建容器載入新環境；單純 `docker compose restart` 不會載入新的環境變數。
 
 ## 建置與檢查
 
