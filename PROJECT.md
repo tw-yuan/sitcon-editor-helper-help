@@ -199,7 +199,7 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 沒有公開 HTTP API 端點。CLI 有 `--check-services`（唯讀服務檢查）、`--check-ai`（主模型與公開搜尋檢查）。測試容器使用 Compose `test` profile，無網路也不掛載憑證。
 
-部署步驟見 [README.md](README.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證與獨立搜尋設定從指定年度 bot 複製到本專案；DeepSeek 主模型自 2026-09-25 改走使用者指定的 Cloudflare AI Gateway。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
+部署與維護步驟見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證與獨立搜尋設定從指定年度 bot 複製到本專案；DeepSeek 主模型自 2026-09-25 改走使用者指定的 Cloudflare AI Gateway。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
 
 主模型保留 `LLM_PROVIDER=openai_compat`，以 `LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat`、`LLM_MODEL=deepseek/deepseek-flash` 呼叫 `POST https://cf-ai.yuan-tw.net/compat/chat/completions`。`LLM_API_KEY` 保存 Cloudflare token，SDK 以 Bearer 認證；base URL 不包含 `/chat/completions`，避免 SDK 重複附加路徑。模型的 `deepseek/` 前綴用來選擇 gateway provider，上游仍使用 `deepseek-flash`。
 
