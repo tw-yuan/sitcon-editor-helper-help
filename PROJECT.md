@@ -15,7 +15,7 @@ Telegram 群組／topic
 Gateway ── /ta、管理指令 ──┐
         │                  │
         ▼                  ▼
-Agent + DeepSeek      編輯組工具
+Agent + 主模型        編輯組工具
 （經 CF AI Gateway）
         │                  │
         ├─ ask_user         ├─ 名冊：Google Sheets（唯一人員來源）
@@ -42,7 +42,7 @@ SQLite：授權、群組記憶、事件、操作步驟、資源對照、通知�
 | Pydantic Settings／models | 環境變數與工具參數驗證，拒絕額外參數。 |
 | httpx | 固定專案的 GitLab REST API，可測試每一筆請求，不提供任意 API 工具。 |
 | google-api-python-client／google-auth | 直接使用 service account 操作 Sheets、Shared Drive 與 Docs。 |
-| OpenAI／Anthropic SDK | DeepSeek 主模型經 Cloudflare 的 OpenAI 相容端點；Anthropic 搜尋另有自己的服務與憑證。 |
+| OpenAI／Anthropic SDK | 主模型 `dynamic/sitcon` 經 Cloudflare 的 OpenAI 相容端點；Anthropic 搜尋另有自己的服務與憑證。 |
 | SQLite／aiosqlite | 單機部署的授權、持久記憶、開卡步驟及通知紀錄，免額外維護資料庫服務。 |
 | uv／Docker Compose | 鎖定依賴與部署環境；容器 UID/GID 固定為 10001。 |
 | pytest／respx／Ruff | 模擬遠端錯誤與重試，測試容器無網路、無正式憑證。格式沿用來源專案。 |
@@ -203,9 +203,9 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 部署與維護步驟見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證與獨立搜尋設定從指定年度 bot 複製到本專案；DeepSeek 主模型自 2026-09-25 改走使用者指定的 Cloudflare AI Gateway。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
 
-主模型保留 `LLM_PROVIDER=openai_compat`，以 `LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat`、`LLM_MODEL=deepseek/deepseek-flash` 呼叫 `POST https://cf-ai.yuan-tw.net/compat/chat/completions`。`LLM_API_KEY` 保存 Cloudflare token，SDK 以 Bearer 認證；base URL 不包含 `/chat/completions`，避免 SDK 重複附加路徑。模型的 `deepseek/` 前綴用來選擇 gateway provider，上游仍使用 `deepseek-flash`。
+主模型保留 `LLM_PROVIDER=openai_compat`，以 `LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat`、`LLM_MODEL=dynamic/sitcon` 呼叫 `POST https://cf-ai.yuan-tw.net/compat/chat/completions`。`LLM_API_KEY` 保存 Cloudflare token，SDK 以 Bearer 認證；base URL 不包含 `/chat/completions`，避免 SDK 重複附加路徑。自 2026-09-26 起，請求中的 `model` 改為原樣傳送使用者指定的 `dynamic/sitcon`。
 
-這次沿用 Chat Completions 的訊息、function calling 與工具結果往返，不新增 Responses adapter、依賴或資料表。選擇此方式是因為 gateway 與既有 adapter 相容，能以環境設定完成遷移。網路搜尋仍使用獨立 `WEB_SEARCH_*` 設定，不與主模型共用新憑證。Cloudflare token 與該 gateway 的 DeepSeek 路由必須可用；錯誤沿用既有遮蔽憑證的 log 與操作錯誤處理。參考 [Cloudflare 相容端點](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/)。
+這次沿用 Chat Completions 的訊息、function calling 與工具結果往返，不新增 Responses adapter、依賴或資料表。選擇此方式是因為 gateway 與既有 adapter 相容，能以環境設定完成遷移。網路搜尋仍使用獨立 `WEB_SEARCH_*` 設定，不與主模型共用新憑證。Cloudflare token 與該 gateway 的 `dynamic/sitcon` 路由必須可用；錯誤沿用既有遮蔽憑證的 log 與操作錯誤處理。參考 [Cloudflare 相容端點](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/)。
 
 直接使用 service account 存取 Shared Drive，不使用網域委派。GitLab 帳號須在固定專案有 Developer 權限並能讀 Wiki；Google 帳號須能讀名冊、複製範本及在根目錄建立內容。
 
@@ -235,6 +235,13 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 - 重新建置正式與測試映像，164 項隔離測試、Ruff check 與 format check 全部通過。這次僅調整環境設定及文件，沿用既有測試與 adapter，沒有新增程式邏輯。
 - Compose 已重建正式 bot 容器；確認容器內的 gateway URL／模型設定正確，log 顯示 `Editorial bot ready`、`Application started`，restart count 為 0。
 - `.env` 只有主模型的 API key、base URL、model 三個值變更；搜尋設定不變。憑證僅保存在權限 600 且不進 Git 的 `.env`，切換用暫存檔已移除。
+
+## dynamic/sitcon 設定驗證（2026-09-26）
+
+- `.env`、`.env.example` 與部署文件已改為 `LLM_MODEL=dynamic/sitcon`；既有 adapter 原樣傳送模型名稱，無須修改程式邏輯。
+- 既有 Docker 測試服務的 16 項 LLM adapter 測試通過。
+- 真實主模型請求回傳 HTTP 400：上游回報收到 `deepseek-v4.1-flash`，但只接受 `deepseek-flash` 或 `deepseek-v4-pro`。須先修正 Gateway 的 `dynamic/sitcon` 路由設定並重新驗證。
+- 此次尚未重建正式 bot 容器，運行中的 `LLM_MODEL` 仍為 `deepseek/deepseek-flash`。路由修正並通過檢查後，再執行 `docker compose up -d bot` 載入新模型；目前直接重建會套用尚未可用的路由。
 
 ## 本次交付驗證
 

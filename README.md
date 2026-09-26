@@ -26,7 +26,7 @@
 flowchart TD
     Telegram[Telegram 群組與話題] <--> Gateway[訊息接收與權限檢查]
     Gateway <--> Agent[Agent 對話與工具調度]
-    Agent <--> LLM[DeepSeek／Cloudflare AI Gateway]
+    Agent <--> LLM[dynamic/sitcon／Cloudflare AI Gateway]
     Agent <--> Tools[工具與工作流程]
     Tools <--> GitLab[GitLab Issues 與 Wiki]
     Tools <--> Google[Google Drive／Docs／Sheets]
@@ -37,7 +37,7 @@ flowchart TD
 
 訊息入口負責群組授權、觸發判斷與對話歸屬。Agent 理解需求後選擇工具；缺少必要資訊時會向原提問者補問，工具執行前再驗證參數與操作範圍。
 
-DeepSeek 透過 Cloudflare AI Gateway 的 Chat Completions 介面進行推論。網路搜尋由獨立的 Anthropic 服務處理，將查詢結果與引用來源交回主模型。
+主模型以 `dynamic/sitcon` 透過 Cloudflare AI Gateway 的 Chat Completions 介面進行推論。網路搜尋由獨立的 Anthropic 服務處理，將查詢結果與引用來源交回主模型。
 
 服務採單一 Docker Compose 容器，以 Telegram long polling 接收訊息，不提供公開 HTTP API，也不需開放對外連入的連接埠。
 
