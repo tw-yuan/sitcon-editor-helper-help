@@ -240,8 +240,8 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 - `.env`、`.env.example` 與部署文件已改為 `LLM_MODEL=dynamic/sitcon`；既有 adapter 原樣傳送模型名稱，無須修改程式邏輯。
 - 既有 Docker 測試服務的 16 項 LLM adapter 測試通過。
-- 真實主模型請求回傳 HTTP 400：上游回報收到 `deepseek-v4.1-flash`，但只接受 `deepseek-flash` 或 `deepseek-v4-pro`。須先修正 Gateway 的 `dynamic/sitcon` 路由設定並重新驗證。
-- 此次尚未重建正式 bot 容器，運行中的 `LLM_MODEL` 仍為 `deepseek/deepseek-flash`。路由修正並通過檢查後，再執行 `docker compose up -d bot` 載入新模型；目前直接重建會套用尚未可用的路由。
+- 首次真實主模型請求回傳 HTTP 400：上游回報收到不受支援的 `deepseek-v4.1-flash`，當時未重新載入正式服務。依使用者要求重試後，`dynamic/sitcon` 已成功回覆 `OK`，`stop_reason=stop`。
+- 已執行 `docker compose up -d --no-deps bot` 重建正式容器，確認容器內 `LLM_MODEL=dynamic/sitcon`。啟動 log 顯示 `Editorial bot ready`、`Application started`，容器為 running，restart count 為 0。
 
 ## 本次交付驗證
 
