@@ -347,6 +347,7 @@ class EditorialTools:
         return await self.once("update_issue", payload, ctx, execute, repeat_safe=True)
 
     async def review(self, args, ctx):
+        ctx.review_completed = False
         # Resolve every target first, before any writes.
         issues = [await self.gl.resolve(t) for t in args.targets]
         issues = list({i["iid"]: i for i in issues}.values())
@@ -411,6 +412,7 @@ class EditorialTools:
                 results.append({"iid": issue["iid"], "status": "已改 Review，通知由系統送出"})
             except Exception as exc:
                 results.append({"iid": issue["iid"], "error": str(exc)})
+        ctx.review_completed = all(packet_id for _, _, packet_id in prepared) and all("error" not in r for r in results)
         return results
 
     async def tag(self, args, ctx):

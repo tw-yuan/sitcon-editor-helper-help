@@ -57,6 +57,7 @@ async def test_review_all_targets_tags_author_and_both_chiefs_once(tools):
     await tools.review(args, ctx)
     assert tools.gl.update.await_count == 2
     assert len(ctx.notices) == 2
+    assert ctx.review_completed
     for notice in ctx.notices:
         assert "@author_one" in notice and "@chief_one" in notice and "@deputy_one" in notice
         assert "&lt;標題&gt;" in notice and "資料夾：" not in notice
@@ -164,6 +165,7 @@ async def test_review_labels_each_available_link_on_its_own_line(tools, document
         expected.append(f"文案：{doc_url}")
     expected.append(f"卡片：{issue['web_url']}")
     assert ctx.notices[0].splitlines()[1:] == expected
+    assert ctx.review_completed is document
     tools.gl.update.assert_awaited_once_with(1, add_labels=["Status::Review"])
     saved = await tools.store.one("SELECT result FROM operations WHERE kind='review'")
     assert json.loads(saved["result"])["notification"] == ctx.notices[0]
@@ -223,3 +225,12 @@ async def test_card_only_description_update_preserves_marker_without_empty_resou
     description = tools.gl.update.call_args.kwargs["description"]
     assert description == "新內容\n\n" + marker
     assert "editorial-resources" not in description and "None" not in description
+
+
+async def test_partial_review_failure_does_not_allow_empty_reply(tools):
+    ctx = context()
+    tools.gl.update.side_effect = [None, RemoteError("GitLab", 503)]
+    results = await tools.review(Review(targets=["1", "2"]), ctx)
+    assert len(ctx.notices) == 1
+    assert "error" in results[1]
+    assert not ctx.review_completed

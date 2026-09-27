@@ -39,6 +39,8 @@ class ToolContext:
     notices: list[str] = field(default_factory=list)
     media: list[MediaItem] = field(default_factory=list)
     reaction: str | None = None
+    # Permit an empty final reply only after all requested PDF reviews succeed.
+    review_completed: bool = False
 
 
 def _strip_titles(schema: dict[str, Any]) -> dict[str, Any]:

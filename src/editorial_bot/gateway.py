@@ -480,7 +480,27 @@ class Gateway:
             receipts = [json.loads(r["result"]) for r in rows]
             notices = list(dict.fromkeys([*result.notices, *[r["notification"] for r in receipts]]))
             messages = self.notice_messages(notices, receipts)
-            messages.extend((chunk, None) for chunk in split_plain(redact(result.reply)))
+            # Enforce the common review-only command even if the model adds a redundant summary.
+            request_text = re.sub(
+                rf"^(?:@{re.escape(bot_username)}\b|{re.escape(self.settings.bot_trigger_name)})[\s，,:：]*",
+                "",
+                text.strip(),
+                count=1,
+                flags=re.I,
+            )
+            review_only = re.fullmatch(
+                r"(?:review|送審|審稿)\s+(#?[1-9]\d*(?:[\s,、]+#?[1-9]\d*)*)[。.!！]?", request_text, re.I
+            )
+            completed = {r["iid"] for r in receipts if r.get("review_id")}
+            suppress_reply = (
+                result.status == "ok"
+                and result.pending is None
+                and previous is None  # A clarification may continue an earlier compound request.
+                and review_only is not None
+                and {int(i) for i in re.findall(r"\d+", review_only[1])} == completed
+            )
+            if not suppress_reply:
+                messages.extend((chunk, None) for chunk in split_plain(redact(result.reply)))
             completion_reaction = None
             if result.status == "ok":
                 completion_reaction = result.reaction or REACT_DONE

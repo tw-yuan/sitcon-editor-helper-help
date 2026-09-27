@@ -322,7 +322,7 @@ class Agent:
                 # 完整 transcript（含最終 assistant 訊息與 raw thinking）交回，供「回覆此則」續接
                 history = [*messages, resp.assistant_message()]
                 return _Outcome(
-                    reply=resp.text or "（我沒看懂，請換個說法再試一次。）",
+                    reply=resp.text or ("" if ctx.review_completed else "（我沒看懂，請換個說法再試一次。）"),
                     tool_actions=actions,
                     history=history,
                 )
@@ -366,15 +366,18 @@ class Agent:
     async def _exec(self, name: str, arguments: dict, ctx: ToolContext) -> str:
         tool = self._tools.get(name)
         if tool is None:
+            ctx.review_completed = False
             return f"（未知工具：{name}）"
         try:
             args = tool.args_model.model_validate(arguments)
         except ValidationError as exc:
+            ctx.review_completed = False
             log.warning("工具 %s 參數驗證失敗：%s", name, exc)
             return f"參數不正確，請修正後重試：{_short_error(exc)}"
         try:
             return await tool.run(args, ctx)
         except Exception as exc:  # 工具邊界：轉為結果字串，讓 LLM 有機會反應
+            ctx.review_completed = False
             log.exception("工具 %s 執行錯誤", name)
             return f"工具執行發生錯誤：{redact(exc)}"
 

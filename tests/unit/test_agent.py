@@ -56,3 +56,35 @@ async def test_question_options_survive_resume_and_plain_text_formatting():
 
     results = [b for m in llm.chat.call_args.kwargs["messages"] for b in m.content if isinstance(b, ToolResultBlock)]
     assert any(b.tool_call_id == "ask" and b.content == "乙" for b in results)
+
+
+async def test_review_can_finish_without_an_extra_reply():
+    async def review(args, ctx):
+        ctx.notices.append("送審通知")
+        ctx.review_completed = True
+        return {"status": "已改 Review"}
+
+    llm = SimpleNamespace(
+        chat=AsyncMock(
+            side_effect=[
+                LLMResponse("", [ToolCall("review", "review_cards", {})], Usage(0, 0), "tool_use", "test", None),
+                LLMResponse("", [], Usage(0, 0), "stop", "test", None),
+            ]
+        )
+    )
+    agent = Agent(
+        llm,
+        ToolRegistry([FunctionTool("review_cards", "review", Empty, review)]),
+        SimpleNamespace(build=AsyncMock(return_value="policy")),
+    )
+    result = await agent.handle(AgentRequest(-1, 55, 7, "writer", "小石，幫我把教師節那張文案送審"))
+    assert result.reply == ""
+    assert result.notices == ["送審通知"]
+    assert result.status == "ok"
+
+
+async def test_empty_response_without_completed_review_keeps_fallback():
+    llm = SimpleNamespace(chat=AsyncMock(return_value=LLMResponse("", [], Usage(0, 0), "stop", "test", None)))
+    agent = Agent(llm, ToolRegistry([]), SimpleNamespace(build=AsyncMock(return_value="policy")))
+    result = await agent.handle(AgentRequest(-1, 55, 7, "writer", "小石，幫忙"))
+    assert "請換個說法" in result.reply

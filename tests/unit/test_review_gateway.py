@@ -1,4 +1,5 @@
 import asyncio
+import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -232,3 +233,63 @@ async def test_caption_edit_timeout_retries_without_resending_pdf(setup):
     reviews.documents.sign.assert_awaited_once()
     bot.send_document.assert_awaited_once()
     bot.send_message.assert_not_awaited()
+
+
+@pytest.mark.parametrize("followup", [False, True])
+@pytest.mark.parametrize(
+    "request_text,status,has_pdf,expect_reply",
+    [
+        ("review 678", "ok", True, False),
+        ("review #678 #678", "ok", True, False),
+        ("小石，review #678", "ok", True, False),
+        ("@editorbot 送審 #678", "ok", True, False),
+        ("review 678 並列出到期日", "ok", True, True),
+        ("review 678，然後把 #679 指派給我", "ok", True, True),
+        ("review 678 679", "ok", True, True),  # Only 678 succeeded.
+        ("review 678", "error", True, True),
+        ("review 678", "clarify", True, True),
+        ("review 678", "ok", False, True),
+    ],
+)
+async def test_review_only_suppresses_summary_but_keeps_other_requests_and_errors(
+    setup, request_text, status, has_pdf, expect_reply, followup
+):
+    from editorial_bot.agent.core import AgentResult
+
+    gateway, reviews, bot, key = setup
+    await gateway.store.execute("DELETE FROM outbox")
+    notice = (await reviews.get(key))["notice"]
+
+    async def handle(req):
+        await gateway.store.operation(key, req.event_id, -1, 7, "review", {"iid": 678})
+        await gateway.store.finish(key, {"iid": 678, "notification": notice, "review_id": key if has_pdf else None})
+        return AgentResult("額外回覆內容", status=status, notices=[notice])
+
+    gateway.agent.handle.side_effect = handle
+    update = SimpleNamespace(
+        update_id=999,
+        effective_message=SimpleNamespace(
+            text=request_text, caption=None, reply_to_message=None, message_id=123, message_thread_id=55
+        ),
+        effective_chat=SimpleNamespace(id=-1, type="supergroup"),
+        effective_user=SimpleNamespace(id=7, username="author", is_bot=False),
+        callback_query=None,
+    )
+    if followup:
+        from editorial_bot.agent.context import Pending
+
+        previous = AgentResult("哪張卡？", pending=Pending([], [], "ask", options=[]))
+        gateway.sessions[(-1, 456)] = (time.monotonic(), 7, 55, previous)
+        update.effective_message.reply_to_message = SimpleNamespace(
+            message_id=456, from_user=SimpleNamespace(id=99), text="哪張卡？", caption=None
+        )
+        expect_reply = True  # The original request may also contain other work.
+    await gateway.handle(update, SimpleNamespace(bot=bot))
+    replies = [c.kwargs["text"] for c in bot.send_message.call_args_list]
+    assert ("額外回覆內容" in replies) is expect_reply
+    if has_pdf:
+        bot.send_document.assert_awaited_once()
+        if not expect_reply:
+            bot.send_message.assert_not_awaited()
+    else:
+        bot.send_document.assert_not_awaited()
