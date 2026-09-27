@@ -18,6 +18,11 @@ def units(text):
     return len(text.encode("utf-16-le")) // 2
 
 
+def visible_units(text):
+    # Notices contain only escaped plain text and optional generated mention anchors.
+    return units(html.unescape(re.sub(r"<[^>]+>", "", text)))
+
+
 class ReviewPackets:
     def __init__(self, store, documents, settings):
         self.store, self.documents, self.settings = store, documents, settings
@@ -28,7 +33,8 @@ class ReviewPackets:
     async def prepare(self, key, ctx, issue, document_id, notice):
         if await self.store.one("SELECT id FROM review_packets WHERE id=?", (key,)):
             return key
-        if units(notice) > 3000:
+        # Leave room for a reader and pagination within Telegram's 1024-unit caption limit.
+        if visible_units(notice) > 900:
             raise ValueError("送審通知過長，請縮短卡名或減少負責人後重試。")
         pdf = await self.documents.export_pdf(document_id)
         title = re.sub(r"[\\/\x00-\x1f]", "_", issue["title"])[:100]
@@ -119,12 +125,14 @@ class ReviewPackets:
                     raise
         return True
 
-    async def render(self, packet, *, page=0):
+    async def render(self, packet, *, page=0, limit=1024):
         rows = await self.store.all(
             "SELECT label FROM review_reads WHERE packet_id=? ORDER BY created_at,rowid", (packet["id"],)
         )
-        base = packet["notice"] + "\n\nPDF 為送審當下版本；修改文案後請重新 review。\n"
-        budget = 3900 - units(base)
+        base = packet["notice"] + "\n\n已看過："
+        budget = limit - visible_units(base) - 64  # Reserve the pagination footer.
+        if budget < 34:
+            raise ValueError("送審通知過長，請縮短卡名或減少負責人後重試。")
         pages, names, size = [], [], 0
         for row in rows:
             label = html.escape(row["label"])
@@ -136,7 +144,7 @@ class ReviewPackets:
             size += length
         pages.append(names)
         page = max(0, min(page, len(pages) - 1))
-        text = base + "已看過：" + ("、".join(pages[page]) or "尚無")
+        text = base + "、".join(pages[page])
         buttons = [[InlineKeyboardButton("簽到", callback_data=f"review_sign:{packet['id']}")]]
         if len(pages) > 1:
             text += f"\n名單第 {page + 1}/{len(pages)} 頁，共 {len(rows)} 人"
@@ -162,7 +170,14 @@ class ReviewPackets:
     async def refresh(self, bot, *, packet_id=None):
         if time.monotonic() < self.retry_at:
             return
-        sql = "SELECT * FROM review_messages WHERE dirty=1"
+        # Outbox receipts identify caption messages without changing legacy message bindings.
+        sql = (
+            "SELECT review_messages.*, EXISTS (SELECT 1 FROM outbox "
+            "WHERE outbox.chat_id=review_messages.chat_id "
+            "AND telegram_message_id=review_messages.message_id AND state='sent' "
+            "AND json_extract(body,'$.kind')='review_document') AS is_caption "
+            "FROM review_messages WHERE dirty=1"
+        )
         params = ()
         if packet_id:
             sql += " AND packet_id=?"
@@ -177,17 +192,21 @@ class ReviewPackets:
                 )
                 if current["dirty"] != 1:
                     continue
-                text, markup = await self.render(await self.get(row["packet_id"]), page=current["page"])
+                text, markup = await self.render(
+                    await self.get(row["packet_id"]), page=current["page"], limit=1024 if row["is_caption"] else 4096
+                )
                 dirty = 0
                 try:
-                    await bot.edit_message_text(
-                        chat_id=row["chat_id"],
-                        message_id=row["message_id"],
-                        text=text,
-                        parse_mode="HTML",
-                        reply_markup=markup,
-                        disable_web_page_preview=True,
-                    )
+                    common = {
+                        "chat_id": row["chat_id"],
+                        "message_id": row["message_id"],
+                        "parse_mode": "HTML",
+                        "reply_markup": markup,
+                    }
+                    if row["is_caption"]:
+                        await bot.edit_message_caption(**common, caption=text)
+                    else:
+                        await bot.edit_message_text(**common, text=text, disable_web_page_preview=True)
                 except RetryAfter as exc:
                     delay = exc.retry_after
                     self.retry_at = time.monotonic() + (

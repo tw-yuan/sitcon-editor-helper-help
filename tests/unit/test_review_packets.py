@@ -101,7 +101,7 @@ async def test_new_review_has_new_pdf_and_reader_list_but_keeps_document_identit
     await reviews.sign(first, person(8, "reader_one"))
     second = await packet(reviews, "b" * 24)
     text, _ = await reviews.render(second)
-    assert "已看過：尚無" in text
+    assert text == second["notice"] + "\n\n已看過："
     await reviews.sign(second, person(8, "changed_username"))
     assert reviews.documents.sign.call_args.args == ("document", "@reader_one")
     assert reviews.documents.export_pdf.await_count == 2
@@ -117,7 +117,7 @@ async def test_large_reader_list_is_paginated_without_losing_names(reviews):
     shown = []
     while True:
         text, markup = await reviews.render(row, page=page)
-        assert len(text.encode("utf-16-le")) // 2 <= 4096
+        assert len(text.encode("utf-16-le")) // 2 <= 1024
         shown.append(text)
         next_button = next((b for buttons in markup.inline_keyboard for b in buttons if b.text == "下一頁"), None)
         if next_button is None:

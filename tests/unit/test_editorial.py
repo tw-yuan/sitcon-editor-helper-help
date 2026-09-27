@@ -59,7 +59,7 @@ async def test_review_all_targets_tags_author_and_both_chiefs_once(tools):
     assert len(ctx.notices) == 2
     for notice in ctx.notices:
         assert "@author_one" in notice and "@chief_one" in notice and "@deputy_one" in notice
-        assert "&lt;標題&gt;" in notice and "/folders/folder" in notice
+        assert "&lt;標題&gt;" in notice and "資料夾：" not in notice
 
 
 async def test_ambiguous_review_target_stops_entire_batch(tools):
@@ -162,8 +162,6 @@ async def test_review_labels_each_available_link_on_its_own_line(tools, document
     expected = []
     if document:
         expected.append(f"文案：{doc_url}")
-    if folder:
-        expected.append(f"資料夾：{folder_url}")
     expected.append(f"卡片：{issue['web_url']}")
     assert ctx.notices[0].splitlines()[1:] == expected
     tools.gl.update.assert_awaited_once_with(1, add_labels=["Status::Review"])

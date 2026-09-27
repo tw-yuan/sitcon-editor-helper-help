@@ -125,7 +125,7 @@ class Gateway:
         messages = []
         for notice in notices:
             if self.reviews and (key := packets.get(notice)):
-                messages.extend([{"kind": "review_pdf", "review_id": key}, {"kind": "review_notice", "review_id": key}])
+                messages.append({"kind": "review_document", "review_id": key})
             else:
                 messages.append((notice, "HTML"))
         return messages
@@ -166,18 +166,26 @@ class Gateway:
                 else None,
             }
             try:
-                if body.get("kind") == "review_pdf":
+                if body.get("kind") == "review_document":
+                    packet = await self.reviews.get(body["review_id"])
+                    text, markup = await self.reviews.render(packet)
+                    message = await bot.send_document(
+                        **common,
+                        document=InputFile(packet["pdf"], filename=packet["filename"]),
+                        caption=text,
+                        parse_mode="HTML",
+                        reply_markup=markup,
+                    )
+                elif body.get("kind") == "review_pdf":
+                    # Finish legacy queued pairs without duplicating an already delivered PDF.
                     packet = await self.reviews.get(body["review_id"])
                     message = await bot.send_document(
                         **common,
                         document=InputFile(packet["pdf"], filename=packet["filename"]),
-                        caption=(
-                            f"文案 PDF｜#{packet['issue_iid']}\n匯出時間：{packet['created_at']}\n此檔為送審當下版本。"
-                        ),
                     )
                 elif body.get("kind") == "review_notice":
                     packet = await self.reviews.get(body["review_id"])
-                    text, markup = await self.reviews.render(packet)
+                    text, markup = await self.reviews.render(packet, limit=4096)
                     message = await bot.send_message(
                         **common,
                         text=text,
@@ -209,7 +217,7 @@ class Gateway:
                 await self.store.execute(
                     "UPDATE outbox SET state='sent',telegram_message_id=? WHERE id=?", (message.message_id, row["id"])
                 )
-                if body.get("kind") == "review_notice":
+                if body.get("kind") in ("review_document", "review_notice"):
                     await self.reviews.bind(body["review_id"], row["chat_id"], message.message_id)
                 sent.append(message.message_id)
                 if question := self.questions.get(body.get("question_token")):
@@ -235,7 +243,7 @@ class Gateway:
             # Rebuild bindings if the previous process stopped after recording delivery.
             for row in await self.store.all(
                 "SELECT chat_id,telegram_message_id,json_extract(body,'$.review_id') AS review_id "
-                "FROM outbox WHERE state='sent' AND json_extract(body,'$.kind')='review_notice'"
+                "FROM outbox WHERE state='sent' AND json_extract(body,'$.kind') IN ('review_document','review_notice')"
             ):
                 await self.reviews.bind(row["review_id"], row["chat_id"], row["telegram_message_id"])
         await self.store.execute("UPDATE outbox SET state='uncertain' WHERE state='sending'")

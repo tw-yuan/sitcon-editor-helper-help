@@ -118,21 +118,21 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 
 改狀態只加入選定狀態並移除同 scope 舊狀態，保留年度及其他分類。Review 仍是 opened。關閉／重新開啟由獨立工具處理，需使用者明確要求。
 
-批次 review 會先辨識全部目標，若某張標題模糊、已關閉、文案卡缺連結，則在寫入前回報。有文案時先完成全部 PDF 匯出與簽到欄位檢查，再逐卡切換狀態、讀回、保存通知內容，由 Telegram gateway 發送。通知列卡號、卡名、作者、總副召，連結依「文案：完整 URL」「資料夾：完整 URL」「卡片：完整 URL」各自換行；只顯示實際存在的資源。格式由工具固定產生並保存至操作收據，讓通知送達與當機恢復沿用同樣標示；一般 AI 回覆也透過 prompt 要求標示連結種類。單張 API 失敗不會把全部卡片說成成功。舊卡可從 description 取連結，不會自動幫舊卡建資料夾。
+批次 review 會先辨識全部目標，若某張標題模糊、已關閉、文案卡缺連結，則在寫入前回報。有文案時先完成全部 PDF 匯出與簽到欄位檢查，再逐卡切換狀態、讀回、保存通知內容，由 Telegram gateway 發送。通知列卡號、卡名、作者、總副召，連結依「文案：完整 URL」「卡片：完整 URL」各自換行；不附資料夾連結，沒有文案時不列空欄。格式由工具固定產生並保存至操作收據，讓通知送達與當機恢復沿用同樣標示；一般 AI 回覆也透過 prompt 要求標示連結種類。單張 API 失敗不會把全部卡片說成成功。舊卡可從 description 取連結，不會自動幫舊卡建資料夾。
 
 ## PDF 快照與多人簽到
 
-使用者選定的呈現方式是「PDF 附件＋獨立簽到通知」。採兩則訊息是因 Telegram PDF caption 上限 1,024 字，獨立文字通知可保留三種連結及多人名單。PDF 先確認送達才送出對應簽到通知；PDF 送達結果不明時不盲目重送，也不先發出該份簽到按鈕。純任務卡沒有文案時沿用文字通知；已知僅開卡紀錄優先於標題／label 的文案推測，避免把「文案規劃」等任務誤判為缺少文件。後來手動附上的文件連結仍可送審。
+PDF 附件、review 通知、「已看過：」與簽到按鈕合併在同一則訊息，以 `sendDocument` 的 caption 及 inline keyboard 送出。尚無簽到者時冒號後留白，不加「尚無」。附件說明上限 1,024 字元，程式保守依 UTF-16 計算 HTML 解析後的顯示長度，通知正文最多 900 單位，預留名單及分頁空間；過長在匯出 PDF 與修改卡片狀態前回報，不截斷卡名或連結。PDF 送達結果不明時不盲目重送。純任務卡沒有文案時沿用文字通知；已知僅開卡紀錄優先於標題／label 的文案推測，避免把「文案規劃」等任務誤判為缺少文件。後來手動附上的文件連結仍可送審。
 
-`ReviewDocuments` 使用 Google Drive 的 `files.export` 取得完整 Docs PDF，沒有另建 Drive 檔案，也不提供公開下載端點；最大 10 MB，檢查 PDF 檔頭。匯出及簽到都先核對 Google 文件位於核准根目錄或直接子資料夾，以及 service account 的編輯／下載能力。每次 review 以操作識別保存快照，同輪重試沿用相同 PDF；不同 review 產生新的快照與各自的已讀名單。顯示匯出時間並提醒文件修改後需重新 review，避免把舊 PDF 當成最新文案。
+`ReviewDocuments` 使用 Google Drive 的 `files.export` 取得完整 Docs PDF，沒有另建 Drive 檔案，也不提供公開下載端點；最大 10 MB，檢查 PDF 檔頭。匯出及簽到都先核對 Google 文件位於核准根目錄或直接子資料夾，以及 service account 的編輯／下載能力。每次 review 以操作識別保存快照，同輪重試沿用相同 PDF；不同 review 產生新的快照與各自的已讀名單。匯出時間保留於資料庫，不顯示 PDF 標題、匯出時間或版本提醒。文件修改後重新 review 才會取得新版 PDF。
 
 `ReviewPackets` 管理通知及簽到：`review_packets` 保存 PDF BLOB、原始通知、文件與群組／topic；`document_signatures` 以文件 ID＋Telegram 數字 ID 凍結首次簽名字串；`review_reads` 保存各份快照的已讀者；`review_messages` 保存實際送達訊息 ID、名單頁碼與待更新狀態。任一已授權群內使用者均可按原通知簽到，不限發起 review 的人，也不套用短期補問的一次性／30 分鐘限制。Callback 必須符合原群及已綁定的原訊息。Telegram 的 message_id 在群組內唯一，跨 topic 也不重複；message_thread_id 則可能是通知本身的回覆串，與原始 review 指令不同，因此不拿 callback 的 thread 值比對授權。通知及後續回覆仍沿用保存的群組／topic；轉傳到別群或同群其他話題會有不同訊息識別，不能簽到。沒有 Telegram username 時用 Telegram ID 作為簽名。
 
 簽到以文件鎖序列化，定位跨 tabs 的唯一「校稿簽到串：」段落，只插入新名字，保留既有名字、占位頓號及正文。依 UTF-16 計算位置，使用 `requiredRevisionId` 防止寫入過期位置；衝突或結果不明會先重讀，已找到簽名就不再插入。只有確認文件已有簽名後，才以 SQLite 交易保存已讀紀錄及通知更新需求。簽名未確認成功不顯示已看過；中斷後再次點擊會沿用同一身分接續，不代其他人簽到。
 
-更新以通知鎖保護，原訊息透過 `editMessageText` 更新「已看過：…」，成功不另發群組訊息。名單超過長度時提供分頁，不遺漏名字。網路失敗保留 dirty 標記，每 15 秒重試；限流遵守 Retry-After；訊息刪除／權限問題記錄明確失敗，不持續刷錯誤。再次點擊可重新嘗試更新；文件簽到不會因此重複。恢復時可由已送達 outbox 紀錄重建按鈕綁定，恢復通知不會重改 Review 或重新匯出 PDF。
+更新以通知鎖保護，PDF 原訊息透過 `editMessageCaption` 更新「已看過：…」，成功不另發群組訊息。名單超過長度時提供分頁，不遺漏名字。網路失敗保留 dirty 標記，每 15 秒重試；限流遵守 Retry-After；訊息刪除／權限問題記錄明確失敗，不持續刷錯誤。再次點擊可重新嘗試更新；文件簽到不會因此重複。恢復時可由已送達 outbox 紀錄重建按鈕綁定，恢復通知不會重改 Review 或重新匯出 PDF。
 
-PDF 不因簽到而重產；「已看過」表示使用者主動按下簽到，不偵測實際讀完內容，也不代表審稿核准。Google Docs 的簽到串可累積跨版本參與者，Telegram 名單則分送審快照計算。更新前的舊通知維持原樣。
+PDF 不因簽到而重產；「已看過」表示使用者主動按下簽到，不偵測實際讀完內容，也不代表審稿核准。Google Docs 的簽到串可累積跨版本參與者，Telegram 名單則分送審快照計算。新通知的 outbox kind 為 `review_document`，同一筆送達收據同時供按鈕綁定及訊息類型判斷，無需資料庫 schema 異動。舊版 `review_pdf`／`review_notice` 待送佇列仍依原順序接續，避免重送附件；已送達的舊文字通知仍以 `editMessageText` 更新名單，不主動刪除或合併群組歷史訊息。
 
 API 依據：[Google PDF 匯出](https://developers.google.com/workspace/drive/api/guides/manage-downloads)、[Google Docs 版本寫入保護](https://developers.google.com/workspace/docs/api/reference/rest/v1/documents/batchUpdate)、[Telegram 文件附件](https://core.telegram.org/bots/api#senddocument)。
 
