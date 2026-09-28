@@ -86,7 +86,7 @@ docker compose ps
 
 首次啟動自動套用 `migrations/`，不需要 seed。授權群組初始為空；在目標編輯組群組中，由 `.env` 的 `TELEGRAM_ADMIN_ID` 使用者送出 `/authorize`，再使用 `/help`。
 
-BotFather 的 privacy mode 必須允許讀取一般群組訊息，才能收到「小石」及裸 `review`。若使用群組 topics，回覆會留在原 topic。
+BotFather 的 privacy mode 必須允許讀取一般群組訊息，才能收到以「小石」或獨立單字 `review` 開頭的訊息。若使用群組 topics，回覆會留在原 topic。
 
 ## 管理與失敗接續
 

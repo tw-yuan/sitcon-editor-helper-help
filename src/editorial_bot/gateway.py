@@ -18,7 +18,7 @@ from .logging_setup import redact
 from .questions import Questions
 
 log = logging.getLogger(__name__)
-HELP = """我是編輯組小石。可以 @我、叫「小石」，或回覆我的訊息。
+HELP = """我是編輯組小石。請以 @我的帳號、「小石」或 review 開頭，或回覆我的訊息。
 
 • /ta：標註全部編輯組員
 • 小石，開卡「確認講者名單」，到期日 10/15（僅建立 GitLab 卡片）
@@ -38,8 +38,8 @@ HELP = """我是編輯組小石。可以 @我、叫「小石」，或回覆我�
 def triggered(text: str, username: str, name: str, reply_to_bot: bool) -> bool:
     return bool(
         reply_to_bot
-        or name in text
-        or re.search(rf"@{re.escape(username)}\b", text, re.I)
+        or text.startswith(name)
+        or re.match(rf"^@{re.escape(username)}(?![A-Za-z0-9_])", text, re.I)
         or re.match(r"^review(?:\s|$)", text, re.I)
     )
 
@@ -482,7 +482,7 @@ class Gateway:
             messages = self.notice_messages(notices, receipts)
             # Enforce the common review-only command even if the model adds a redundant summary.
             request_text = re.sub(
-                rf"^(?:@{re.escape(bot_username)}\b|{re.escape(self.settings.bot_trigger_name)})[\s，,:：]*",
+                rf"^(?:@{re.escape(bot_username)}(?![A-Za-z0-9_])|{re.escape(self.settings.bot_trigger_name)})[\s，,:：]*",
                 "",
                 text.strip(),
                 count=1,

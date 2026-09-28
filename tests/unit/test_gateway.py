@@ -53,10 +53,43 @@ async def test_timeout_receipt_prevents_automatic_resend_and_preserves_topic(gat
     assert (await gateway.store.one("SELECT state FROM outbox"))["state"] == "uncertain"
 
 
-def test_triggers_and_unicode_limits():
-    assert triggered("review 123 124", "editorbot", "小石", False)
-    assert not triggered("我們今天要 review", "editorbot", "小石", False)
-    assert triggered("@editorbot 開卡", "editorbot", "小石", False)
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("@editorbot 開卡", True),
+        ("@EditorBot，開卡", True),
+        ("@editorbot開卡", True),
+        ("@editorbot", True),
+        ("小石 開卡", True),
+        ("小石，開卡", True),
+        ("小石開卡", True),
+        ("小石", True),
+        ("review 123 124", True),
+        ("REVIEW #123", True),
+        ("review", True),
+        ("我們今天要 review", False),
+        ("reviewer", False),
+        ("reviews #123", False),
+        (" review #123", False),
+        ("有人看到小石嗎？", False),
+        ("請 @editorbot 開卡", False),
+        ("第一行\n小石 開卡", False),
+        ("第一行\n@editorbot 開卡", False),
+        (" 小石 開卡", False),
+        ("\n@editorbot 開卡", False),
+        ("@editorbot_extra 開卡", False),
+        ("@editorbot2 開卡", False),
+        ("@editorbotx 開卡", False),
+        ("@otherbot 開卡", False),
+        ("", False),
+    ],
+)
+def test_only_addressed_prefixes_review_or_replies_trigger(text, expected):
+    assert triggered(text, "editorbot", "小石", False) is expected
+    assert triggered(text, "editorbot", "小石", True)
+
+
+def test_unicode_limits():
     text = "🙂" * 3000 + "中文"
     chunks = split_plain(text)
     assert "".join(chunks) == text
@@ -71,6 +104,50 @@ def feedback_bot():
         set_message_reaction=AsyncMock(),
         send_chat_action=AsyncMock(),
     )
+
+
+@pytest.mark.parametrize(
+    "text,reply_author,expected",
+    [
+        ("@editorbot 開卡", None, True),
+        ("@editorbot開卡", None, True),
+        ("小石開卡", None, True),
+        ("review #123", None, True),
+        ("我們今天要 review", None, False),
+        ("請小石開卡", None, False),
+        ("請 @editorbot 開卡", None, False),
+        ("@editorbot_extra 開卡", None, False),
+        ("這是回答", 99, True),
+        ("review #123", 99, True),
+        ("這是回答", 100, False),
+        ("小石開卡", 100, True),
+    ],
+)
+async def test_gateway_ignores_messages_outside_allowed_triggers(gateway, text, reply_author, expected):
+    from editorial_bot.agent.core import AgentResult
+
+    await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    bot = feedback_bot()
+    gateway.agent.handle.return_value = AgentResult("收到")
+    incoming = update(text=text)
+    if reply_author is not None:
+        incoming.effective_message.reply_to_message = SimpleNamespace(
+            message_id=100,
+            from_user=SimpleNamespace(id=reply_author),
+            text="原訊息",
+            caption=None,
+        )
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    if expected:
+        gateway.agent.handle.assert_awaited_once()
+        assert gateway.agent.handle.call_args.args[0].text == text
+    else:
+        gateway.agent.handle.assert_not_awaited()
+        bot.send_message.assert_not_awaited()
+        bot.set_message_reaction.assert_not_awaited()
+        bot.send_chat_action.assert_not_awaited()
+        assert await gateway.store.all("SELECT * FROM events") == []
+        assert await gateway.store.all("SELECT * FROM audit_log") == []
 
 
 @pytest.mark.parametrize(

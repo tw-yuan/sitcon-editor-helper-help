@@ -243,6 +243,7 @@ async def test_caption_edit_timeout_retries_without_resending_pdf(setup):
         ("review #678 #678", "ok", True, False),
         ("小石，review #678", "ok", True, False),
         ("@editorbot 送審 #678", "ok", True, False),
+        ("@editorbot送審 #678", "ok", True, False),
         ("review 678 並列出到期日", "ok", True, True),
         ("review 678，然後把 #679 指派給我", "ok", True, True),
         ("review 678 679", "ok", True, True),  # Only 678 succeeded.
