@@ -330,6 +330,8 @@ class Gateway:
             return
         text = message.text or message.caption or ""
         callback = update.callback_query
+        # Ordinary group replies may expose a reply-thread ID without being a forum topic.
+        thread = message.message_thread_id if getattr(message, "is_topic_message", False) else None
         bot_username = context.bot.username
         command_match = None if callback else re.match(r"^/(\w+)(?:@([A-Za-z0-9_]+))?(?:\s|$)", text)
         if command_match and command_match[2] and command_match[2].casefold() != bot_username.casefold():
@@ -382,7 +384,7 @@ class Gateway:
             await message.reply_text("已撤銷本群授權。")
             return
         if command == "reload":
-            async with progress(context.bot, chat.id, message.message_thread_id, message.message_id):
+            async with progress(context.bot, chat.id, thread, message.message_id):
                 await self.roster.reload()
                 await self.knowledge.refresh(force=True)
                 await message.reply_text("名冊及 Wiki 快取已更新。")
@@ -415,7 +417,8 @@ class Gateway:
         if command and command != "ta":
             return
         event = f"telegram:{update.update_id}"
-        thread = choice.entry.thread_id if choice else message.message_thread_id
+        if choice:
+            thread = choice.entry.thread_id
         if not await self.store.claim_event(event, chat.id, thread, user.id, message.message_id):
             return
         # Feedback starts while queued; callbacks have no new user message to react to.

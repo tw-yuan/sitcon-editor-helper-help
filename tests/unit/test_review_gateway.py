@@ -270,7 +270,12 @@ async def test_review_only_suppresses_summary_but_keeps_other_requests_and_error
     update = SimpleNamespace(
         update_id=999,
         effective_message=SimpleNamespace(
-            text=request_text, caption=None, reply_to_message=None, message_id=123, message_thread_id=55
+            text=request_text,
+            caption=None,
+            reply_to_message=None,
+            message_id=123,
+            message_thread_id=55,
+            is_topic_message=True,
         ),
         effective_chat=SimpleNamespace(id=-1, type="supergroup"),
         effective_user=SimpleNamespace(id=7, username="author", is_bot=False),

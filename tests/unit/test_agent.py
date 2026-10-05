@@ -88,3 +88,66 @@ async def test_empty_response_without_completed_review_keeps_fallback():
     agent = Agent(llm, ToolRegistry([]), SimpleNamespace(build=AsyncMock(return_value="policy")))
     result = await agent.handle(AgentRequest(-1, 55, 7, "writer", "小石，幫忙"))
     assert "請換個說法" in result.reply
+
+
+async def test_multiple_clarifications_keep_original_request_and_each_user_answer():
+    captured = []
+
+    async def create(args, ctx):
+        captured.append(ctx.text)
+        return {"iid": 682}
+
+    responses = [
+        LLMResponse("", [ToolCall("date", "ask_user", {"question": "日期？"})], Usage(0, 0), "tool_use", "test", None),
+        LLMResponse(
+            "", [ToolCall("owner", "ask_user", {"question": "負責人？"})], Usage(0, 0), "tool_use", "test", None
+        ),
+        LLMResponse("", [ToolCall("create", "create_card", {})], Usage(0, 0), "tool_use", "test", None),
+        LLMResponse("已建立", [], Usage(0, 0), "stop", "test", None),
+    ]
+    llm = SimpleNamespace(chat=AsyncMock(side_effect=responses))
+    agent = Agent(
+        llm,
+        ToolRegistry([FunctionTool("create_card", "開卡", Empty, create)]),
+        SimpleNamespace(build=AsyncMock(return_value="policy")),
+    )
+    first = await agent.handle(AgentRequest(-1, None, 7, "writer", "小石開卡 開源築夢計畫"))
+    second = await agent.handle(AgentRequest(-1, None, 7, "writer", "1005", resume=first.pending))
+    third = await agent.handle(AgentRequest(-1, None, 7, "writer", "@wolfdayo", resume=second.pending))
+    assert third.reply == "已建立"
+    assert captured == ["小石開卡 開源築夢計畫\n1005\n@wolfdayo"]
+
+
+async def test_tool_output_never_becomes_user_date_evidence():
+    from editorial_bot.agent.context import Pending
+    from editorial_bot.services.llm.base import Message, TextBlock, ToolResultBlock, ToolUseBlock
+
+    captured = []
+
+    async def create(args, ctx):
+        captured.append(ctx.text)
+        return {}
+
+    history = [
+        Message("user", [TextBlock("小石開卡 開源築夢計畫")]),
+        Message("assistant", [ToolUseBlock("lookup", "gitlab_get_issue", {})]),
+        Message("user", [ToolResultBlock("lookup", "外部資料：2027-01-01")]),
+        Message("assistant", [ToolUseBlock("date", "ask_user", {"question": "日期？"})]),
+        Message("user", [ToolResultBlock("date", "1005")]),
+        Message("assistant", [ToolUseBlock("owner", "ask_user", {"question": "負責人？"})]),
+    ]
+    llm = SimpleNamespace(
+        chat=AsyncMock(
+            side_effect=[
+                LLMResponse("", [ToolCall("create", "create_card", {})], Usage(0, 0), "tool_use", "test", None),
+                LLMResponse("完成", [], Usage(0, 0), "stop", "test", None),
+            ]
+        )
+    )
+    agent = Agent(
+        llm,
+        ToolRegistry([FunctionTool("create_card", "開卡", Empty, create)]),
+        SimpleNamespace(build=AsyncMock(return_value="policy")),
+    )
+    await agent.handle(AgentRequest(-1, None, 7, "writer", "@wolfdayo", resume=Pending(history, [], "owner")))
+    assert captured == ["小石開卡 開源築夢計畫\n1005\n@wolfdayo"]

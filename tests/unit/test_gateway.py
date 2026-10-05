@@ -22,7 +22,13 @@ async def gateway(tmp_path):
 
 def update(chat=-1, user=8, text="小石 開卡", kind="supergroup"):
     message = SimpleNamespace(
-        text=text, caption=None, reply_to_message=None, message_id=123, message_thread_id=55, reply_text=AsyncMock()
+        text=text,
+        caption=None,
+        reply_to_message=None,
+        message_id=123,
+        message_thread_id=55,
+        is_topic_message=True,
+        reply_text=AsyncMock(),
     )
     return SimpleNamespace(
         effective_message=message,
@@ -417,3 +423,89 @@ async def test_deferred_question_delivery_still_supports_buttons_and_text(gatewa
     markup = last.kwargs["reply_markup"]
     assert gateway.conversation(-1, 456, 8, 55) is result
     assert gateway.questions.choose(markup.inline_keyboard[0][1].callback_data, -1, 55, 8, 456).text == "乙"
+
+
+def telegram_text_update(bot, text, mid, *, thread=None, topic=False, reply=None, user=8):
+    message = {
+        "message_id": mid,
+        "date": 1700000000,
+        "chat": {"id": -1, "type": "supergroup", "is_forum": topic},
+        "from": {"id": user, "is_bot": False, "first_name": "作者"},
+        "text": text,
+    }
+    if thread is not None:
+        message["message_thread_id"] = thread
+    if topic:
+        message["is_topic_message"] = True
+    if reply:
+        message["reply_to_message"] = reply
+    return Update.de_json({"update_id": mid, "message": message}, bot)
+
+
+@pytest.mark.parametrize("original_thread", [None, 80])
+@pytest.mark.parametrize("mode", ["free_text", "options", "history"])
+async def test_nonforum_text_reply_keeps_original_request_despite_reply_thread(gateway, original_thread, mode):
+    from editorial_bot.agent.context import Pending
+    from editorial_bot.agent.core import AgentResult
+    from editorial_bot.services.llm.base import Message, TextBlock
+
+    await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    bot = feedback_bot()
+    bot.edit_message_reply_markup = AsyncMock()
+    original = "小石開卡 開源築夢計畫 DDL 今天 @wolfdayo"
+    history = [Message("user", [TextBlock(original)])]
+    pending = (
+        None
+        if mode == "history"
+        else Pending(history, [], "ask", options=["1005", "1006"] if mode == "options" else [])
+    )
+    result = AgentResult("請提供日期", pending=pending, history=history if pending is None else None)
+    gateway.agent.handle.return_value = result
+    await gateway.handle(telegram_text_update(bot, original, 123, thread=original_thread), SimpleNamespace(bot=bot))
+    menu = {
+        "message_id": 456,
+        "date": 1700000000,
+        "chat": {"id": -1, "type": "supergroup"},
+        "from": {"id": 99, "is_bot": True, "first_name": "小石"},
+        "text": result.reply,
+        "message_thread_id": 123,
+    }
+    gateway.agent.handle.reset_mock()
+    gateway.agent.handle.return_value = AgentResult("已開卡")
+    incoming = telegram_text_update(bot, "1005", 457, thread=123, reply=menu)
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    resumed = gateway.agent.handle.call_args.args[0]
+    assert resumed.resume is pending
+    # Gateway trims/copies history before storing it; contents, not list identity, must survive.
+    assert resumed.history == (history if mode == "history" else None)
+    assert resumed.reply_context is None
+    assert resumed.thread_id is None
+    assert bot.send_message.call_args.kwargs["message_thread_id"] is None
+
+
+@pytest.mark.parametrize("topic,user,resumes", [(55, 8, True), (56, 8, False), (55, 9, False)])
+async def test_forum_text_reply_still_requires_original_topic_and_requester(gateway, topic, user, resumes):
+    from editorial_bot.agent.context import Pending
+    from editorial_bot.agent.core import AgentResult
+
+    await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    bot = feedback_bot()
+    pending = Pending([], [], "ask")
+    gateway.agent.handle.return_value = AgentResult("日期？", pending=pending)
+    original = telegram_text_update(bot, "小石開卡 公告", 123, thread=55, topic=True)
+    await gateway.handle(original, SimpleNamespace(bot=bot))
+    menu = {
+        "message_id": 456,
+        "date": 1700000000,
+        "chat": {"id": -1, "type": "supergroup", "is_forum": True},
+        "from": {"id": 99, "is_bot": True, "first_name": "小石"},
+        "text": "日期？",
+        "message_thread_id": 55,
+        "is_topic_message": True,
+    }
+    gateway.agent.handle.return_value = AgentResult("收到")
+    await gateway.handle(
+        telegram_text_update(bot, "1005", 457, thread=topic, topic=True, reply=menu, user=user),
+        SimpleNamespace(bot=bot),
+    )
+    assert (gateway.agent.handle.call_args.args[0].resume is pending) is resumes

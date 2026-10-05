@@ -86,6 +86,10 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 
 訊息 outbox 的 JSON body 只記錄問題識別碼，鍵盤放在問題最後一段；延遲送達後仍綁定實際送達的 message_id，支援文字及按鈕作答，不需資料庫 migration。重啟或過期後識別碼無效，舊按鈕會提示重新提出需求。既有歷史訊息不會補上按鈕。
 
+文字補問及一般追問只在 Telegram 訊息的 `is_topic_message=true` 時採用 `message_thread_id`；一般群組一律以無 topic 保存／查詢 session、處理鎖、事件及回覆目的地，避免原需求、問題與使用者回答各自出現不同回覆串 ID，造成脈絡被當成失效。論壇 topic 仍精確比對；同群其他使用者無法接續原 Pending。欄位定義依 [Telegram Message](https://core.telegram.org/bots/api#message)。
+
+Agent 續接時，除原始使用者訊息，也依原 `ask_user` 呼叫 ID 取回每次工具結果中的使用者回答，供日期等程式層驗證。只將已對應補問的答案視為輸入，不將 GitLab、Wiki 等其他工具結果當作使用者授權或日期證據。提示詞要求只補缺少的欄位，已提供的標題、日期及負責人不得重複追問。
+
 ## 開卡資料流
 
 `create_card.document` 預設為 `true`，一般開卡建立 GitLab Issue、Drive 資料夾與範本 Docs。只有使用者明確要求「僅開卡／只開卡／不要資料夾、文案或文件」時才設為 `false`。不因標題、圖片或 label 自行略過文件；兩種模式仍使用 Sheets 名冊查核負責人。這個預設依 2026-10-05 的需求調整，既有操作保存的 `document=false` 不會被覆寫，重試仍遵守當時的選擇。

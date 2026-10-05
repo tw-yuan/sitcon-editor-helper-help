@@ -19,7 +19,16 @@ from typing import TYPE_CHECKING, Any
 from pydantic import ValidationError
 
 from ..logging_setup import redact
-from ..services.llm.base import LLMClient, LLMResponse, Message, TextBlock, ThinkingLevel, ToolResultBlock, ToolSpec
+from ..services.llm.base import (
+    LLMClient,
+    LLMResponse,
+    Message,
+    TextBlock,
+    ThinkingLevel,
+    ToolResultBlock,
+    ToolSpec,
+    ToolUseBlock,
+)
 from .context import Pending
 from .tools.base import ToolContext, ToolRegistry
 from .tools.external_data import wrap_external
@@ -158,11 +167,21 @@ class Agent:
             event_id=req.event_id,
         )
         prior = req.resume.messages if req.resume else req.history or []
-        evidence = [
-            m.content[-1].text
-            for m in prior
-            if m.role == "user" and m.content and all(isinstance(b, TextBlock) for b in m.content)
-        ]
+        evidence = []
+        questions = set()
+        for message in prior:
+            if message.role == "assistant":
+                questions.update(b.id for b in message.content if isinstance(b, ToolUseBlock) and b.name == ASK_USER)
+            elif message.role == "user" and message.content:
+                if all(isinstance(b, TextBlock) for b in message.content):
+                    evidence.append(message.content[-1].text)
+                else:
+                    # Only ask_user results contain prior user answers; external tool output is not input evidence.
+                    evidence.extend(
+                        b.content
+                        for b in message.content
+                        if isinstance(b, ToolResultBlock) and b.tool_call_id in questions
+                    )
         ctx.text = "\n".join([*evidence, req.text])
         system = await self._prompt.build(chat_id=req.chat_id, reference_time=ctx.reference_time)
 
