@@ -115,7 +115,7 @@ async def main():
         create = next(tool for tool in tools if tool.name == "create_card")
         expected_date = f"{datetime.now(ZoneInfo(settings.tz)).year}-09-25"
         cases = [
-            ("小石開卡 0925 test", "test", False),
+            ("小石開卡 0925 test", "test", True),
             ("小石，僅開卡 0925 文案規劃，不需要文件", "文案規劃", False),
             ("小石，開卡並建立文案 0925 test", "test", True),
         ]
@@ -131,6 +131,23 @@ async def main():
             assert parsed.title == title and parsed.due_date == expected_date, "MMDD 到期日或標題解析錯誤"
             assert parsed.document is document, f"開卡模式解析錯誤：{text}"
             validate_explicit_date(text, parsed.due_date, settings.tz)
+        add_document = next(tool for tool in tools if tool.name == "add_card_document")
+        resume = next(tool for tool in tools if tool.name == "resume_operation")
+        for request in ("小石，幫 #682 補建資料夾與文案", "資料夾跟文案呢"):
+            proposal = await build_llm_client(settings).chat(
+                system=await PromptBuilder(settings, store).build(chat_id=-1),
+                messages=[
+                    Message("user", [TextBlock("小石，只開卡 1005 開源築夢計畫")]),
+                    Message("assistant", [TextBlock("已建立 #682，只有 GitLab 卡片。")]),
+                    Message("user", [TextBlock(request)]),
+                ],
+                tools=[create.spec(), add_document.spec(), resume.spec(), ASK_USER_SPEC],
+                thinking=settings.llm_thinking,
+            )
+            assert len(proposal.tool_calls) == 1 and proposal.tool_calls[0].name == "add_card_document", (
+                "既有卡片補建應使用專用工具，不重開卡或猜測操作 ID"
+            )
+            assert add_document.args_model.model_validate(proposal.tool_calls[0].arguments).iid == 682
         print(
             json.dumps(
                 {
@@ -138,6 +155,7 @@ async def main():
                     "relative_date_asks_user": True,
                     "compact_date_and_title": True,
                     "card_only_and_document_modes": True,
+                    "existing_card_document_tool": True,
                     "consent_button_options": True,
                     "plain_text_replies": True,
                     "remote_writes": 0,

@@ -21,8 +21,9 @@ log = logging.getLogger(__name__)
 HELP = """我是編輯組小石。請以 @我的帳號、「小石」或 review 開頭，或回覆我的訊息。
 
 • /ta：標註全部編輯組員
-• 小石，開卡「確認講者名單」，到期日 10/15（僅建立 GitLab 卡片）
-• 小石，開卡並建立文案「報名開跑」，到期日 10/15（含 Drive 資料夾與文件）
+• 小石，開卡「報名開跑」，到期日 10/15（預設含 Drive 資料夾與範本文案）
+• 小石，只開卡「確認講者名單」，到期日 10/15（僅建立 GitLab 卡片）
+• 小石，幫 #123 補建資料夾與文案（保留原卡片）
 • 小石，列出尚未關閉的卡片
 • 小石，把 #123 指派給 @username
 • review #123 #124：送審、文案 PDF 與簽到，並標註總副召
@@ -257,7 +258,7 @@ class Gateway:
             summary = "前次處理途中重新啟動，請查核以下紀錄後接續，避免重複操作。\n"
             for op in ops:
                 summary += f"{op['id']}：{op['kind']}／{op['state']}\n"
-                if op["kind"] == "create_card" and op["state"] == "done":
+                if op["kind"] in {"create_card", "add_card_document"} and op["state"] == "done":
                     result = json.loads(op["result"])
                     summary += (
                         "\n".join(result[k] for k in ("issue_url", "folder_url", "document_url") if result.get(k))

@@ -191,14 +191,50 @@ async def test_review_receipt_records_pdf_packet_and_retry_reuses_snapshot(tools
 
 
 @pytest.mark.parametrize("document", [None, False, True])
-async def test_create_mode_defaults_to_card_only_and_selects_matching_labels(tools, document):
+async def test_create_mode_defaults_to_document_and_selects_matching_labels(tools, document):
     args, ctx = await prepare_create(tools)
     if document is not None:
         args.document = document
     await tools.create(args, ctx)
     payload = tools.workflow.create.call_args.args[0]
-    assert payload["document"] is (document is True)
-    assert payload["labels"] == ["社群文案" if document else "編輯組專案", "Status::Inbox"]
+    assert payload["document"] is (document is not False)
+    assert payload["labels"] == ["社群文案" if document is not False else "編輯組專案", "Status::Inbox"]
+
+
+async def test_add_document_tool_accepts_only_existing_card_number(tools):
+    from pydantic import ValidationError
+
+    tools.workflow = SimpleNamespace(add_document=AsyncMock(return_value={"iid": 682}))
+    tool = next(t for t in tools.build() if t.name == "add_card_document")
+    ctx = context()
+    await tool.run(tool.args_model(iid=682), ctx)
+    tools.workflow.add_document.assert_awaited_once_with(682, ctx)
+    with pytest.raises(ValidationError):
+        tool.args_model(iid=0)
+    with pytest.raises(ValidationError):
+        tool.args_model(iid=682, folder_id="arbitrary")
+
+
+@pytest.mark.parametrize("owner", ["same", "other_user", "other_chat"])
+async def test_resume_document_dispatches_only_original_owner_operation(tools, owner):
+    from editorial_bot.agent.tools.editorial import Resume
+
+    ctx = context()
+    key = "a" * 24
+    await tools.store.operation(key, "first", ctx.chat_id, ctx.user_id, "add_card_document", {"iid": 682})
+    tools.workflow = SimpleNamespace(add_document=AsyncMock(return_value={"iid": 682}), create=AsyncMock())
+    if owner == "other_user":
+        ctx.user_id += 1
+    elif owner == "other_chat":
+        ctx.chat_id -= 1
+    if owner == "same":
+        await tools.resume(Resume(operation_id=key), ctx)
+        tools.workflow.add_document.assert_awaited_once_with(682, ctx, resume_id=key)
+    else:
+        with pytest.raises(ValueError, match="找不到"):
+            await tools.resume(Resume(operation_id=key), ctx)
+        tools.workflow.add_document.assert_not_awaited()
+    tools.workflow.create.assert_not_awaited()
 
 
 async def test_card_only_review_does_not_infer_document_from_title_or_label(tools):

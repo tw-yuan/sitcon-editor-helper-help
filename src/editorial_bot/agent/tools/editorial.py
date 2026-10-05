@@ -32,8 +32,8 @@ class Create(Args):
     title: str = Field(min_length=1, max_length=255)
     due_date: str = Field(description="使用者明確指定日期轉成 YYYY-MM-DD；未給年份用台灣當前年份。")
     document: bool = Field(
-        False,
-        description="預設 false，僅建 GitLab 卡片；明確要求文案卡或建立文案才為 true，建立 Drive 資料夾與 Docs。",
+        True,
+        description="預設 true，建立 GitLab 卡片、Drive 資料夾與範本 Docs；明確要求只開卡或不要文件才為 false。",
     )
     description: str = ""
     labels: list[str] = Field(default_factory=list, description="精確使用既有 label；空值採文案／任務預設分類。")
@@ -50,6 +50,10 @@ class Create(Args):
 class Issue(Args):
     iid: int = Field(gt=0)
     include_notes: bool = False
+
+
+class AddDocument(Args):
+    iid: int = Field(gt=0, description="要補建資料夾與範本文案的既有卡號；不會另開卡片。")
 
 
 class Search(Args):
@@ -246,11 +250,16 @@ class EditorialTools:
             "SELECT * FROM operations WHERE id=? AND chat_id=? AND user_id=?",
             (args.operation_id, ctx.chat_id, ctx.user_id),
         )
-        if not op or op["kind"] != "create_card":
-            raise ValueError("找不到你在本群的可接續開卡操作。")
+        if not op or op["kind"] not in {"create_card", "add_card_document"}:
+            raise ValueError("找不到你在本群的可接續開卡或補建操作。")
         payload = json.loads(op["payload"])
+        if op["kind"] == "add_card_document":
+            return await self.workflow.add_document(payload["iid"], ctx, resume_id=op["id"])
         await self.members_for_ids(payload["assignee_ids"])
         return await self.workflow.create(payload, ctx, resume_id=op["id"])
+
+    async def add_document(self, args, ctx):
+        return await self.workflow.add_document(args.iid, ctx)
 
     async def get(self, args, ctx):
         issue = await self.gl.get(args.iid)
@@ -502,11 +511,17 @@ class EditorialTools:
             ),
             FunctionTool(
                 "create_card",
-                "開卡：預設僅建立 GitLab 卡片；明確要求建立文案才建立 MMDD_TITLE 資料夾與範本 Docs。只用既有 label。",
+                "開卡：預設建立 GitLab 卡片、MMDD_TITLE 資料夾與範本 Docs；明確只開卡才略過文件。只用既有 label。",
                 Create,
                 self.create,
             ),
-            FunctionTool("resume_operation", "接續自己在本群未完成的開卡操作。", Resume, self.resume),
+            FunctionTool(
+                "add_card_document",
+                "替既有卡片補建資料夾與範本 Docs，使用卡片到期日；已有文案則回傳連結，不重開卡或覆蓋文件。",
+                AddDocument,
+                self.add_document,
+            ),
+            FunctionTool("resume_operation", "接續自己在本群未完成的開卡或補建文案操作。", Resume, self.resume),
             FunctionTool("gitlab_get_issue", "讀取卡片、關聯卡及選用人工留言。", Issue, self.get),
             FunctionTool("gitlab_search_issues", "查卡；未關閉包含 Review，支援條件篩選。", Search, self.search),
             FunctionTool(
