@@ -61,12 +61,12 @@ class Questions:
         buttons = [InlineKeyboardButton(label, callback_data=f"choose:{token}:{i}") for i, label in enumerate(labels)]
         return InlineKeyboardMarkup([buttons[i : i + 3] for i in range(0, len(buttons), 3)])
 
-    def _validate(self, entry, chat_id, thread_id, user_id):
+    def _validate(self, entry, chat_id, thread_id, user_id, *, check_thread=True):
         if entry is None or self.clock() - entry.created_at >= self.ttl:
             raise ValueError("這個問題已過期，請重新提出需求。")
         if entry.user_id != user_id:
             raise ValueError("這個問題只能由原提問者回答。")
-        if (entry.chat_id, entry.thread_id) != (chat_id, thread_id):
+        if entry.chat_id != chat_id or (check_thread and entry.thread_id != thread_id):
             raise ValueError("問題的群組或話題不符。")
         if entry.used:
             raise ValueError("這個問題已回答，請勿重複操作。")
@@ -83,7 +83,9 @@ class Questions:
         if not match:
             raise ValueError("無效的選項，請重新提出需求。")
         entry = self.entries.get(match[1])
-        self._validate(entry, chat_id, thread_id, user_id)
+        # The bound message ID is unique within the chat. Telegram may report
+        # the question's reply thread instead of the original request's topic.
+        self._validate(entry, chat_id, thread_id, user_id, check_thread=False)
         if message_id not in entry.message_ids:
             raise ValueError("問題訊息不符。")
         index = int(match[2])

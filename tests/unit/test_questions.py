@@ -21,8 +21,9 @@ def test_numeric_buttons_bind_owner_message_and_consume_once():
         questions.choose(buttons[1].callback_data, -1, 55, 8, 456)
     with pytest.raises(ValueError, match="不符"):
         questions.choose(buttons[1].callback_data, -2, 55, 7, 456)
+    # A copy in another topic has a different message ID, even in the same chat.
     with pytest.raises(ValueError, match="不符"):
-        questions.choose(buttons[1].callback_data, -1, 56, 7, 456)
+        questions.choose(buttons[1].callback_data, -1, 56, 7, 457)
     with pytest.raises(ValueError, match="不符"):
         questions.choose(buttons[1].callback_data, -1, 55, 7, 457)
     choice = questions.choose(buttons[1].callback_data, -1, 55, 7, 456)

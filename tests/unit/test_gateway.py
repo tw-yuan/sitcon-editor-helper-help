@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from telegram import Update
 from telegram.error import TimedOut
 
 from editorial_bot.gateway import Gateway, split_plain, triggered
@@ -289,6 +290,49 @@ async def test_choice_button_resumes_original_question_once(gateway):
     assert "已回答" in incoming.callback_query.answer.call_args.kwargs["text"]
 
 
+@pytest.mark.parametrize("original_thread,callback_thread", [(None, 123), (55, 123), (55, None)])
+@pytest.mark.parametrize("agree", [True, False])
+async def test_original_question_callback_uses_saved_thread(gateway, original_thread, callback_thread, agree):
+    bot, pending, menu = await issue_question(gateway, ["同意", "不同意"])
+    entry = next(iter(gateway.questions.entries.values()))
+    entry.thread_id = original_thread
+    callback_message = {
+        "message_id": 456,
+        "date": 1700000000,
+        "chat": {"id": -1, "type": "supergroup"},
+        "from": {"id": 99, "is_bot": True, "first_name": "小石"},
+        "text": menu.text,
+    }
+    if callback_thread is not None:
+        callback_message["message_thread_id"] = callback_thread
+    incoming = Update.de_json(
+        {
+            "update_id": 10,
+            "callback_query": {
+                "id": "question-choice",
+                "chat_instance": "test",
+                "from": {"id": 8, "is_bot": False, "first_name": "作者", "username": "writer"},
+                "message": callback_message,
+                "data": menu.reply_markup.inline_keyboard[0][0 if agree else 1].callback_data,
+            },
+        },
+        bot,
+    )
+    bot.answer_callback_query = AsyncMock()
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    assert entry.used
+    if agree:
+        request = gateway.agent.handle.call_args.args[0]
+        assert request.resume is pending and request.text == "同意"
+        assert request.thread_id == original_thread
+    else:
+        gateway.agent.handle.assert_not_awaited()
+        assert "已取消" in bot.send_message.call_args.kwargs["text"]
+    assert bot.send_message.call_args.kwargs["message_thread_id"] == original_thread
+    event = await gateway.store.one("SELECT thread_id FROM events WHERE id='telegram:10'")
+    assert event["thread_id"] == original_thread
+
+
 @pytest.mark.parametrize("invalid", ["user", "chat", "thread", "message", "expired", "restart", "forged", "revoked"])
 async def test_invalid_choices_never_resume_or_consume(gateway, invalid):
     from editorial_bot.questions import Questions
@@ -302,6 +346,7 @@ async def test_invalid_choices_never_resume_or_consume(gateway, invalid):
         incoming.effective_chat.id = -2
     elif invalid == "thread":
         menu.message_thread_id = 56
+        menu.message_id = 999  # Forwarded/copied questions have a new message ID.
     elif invalid == "message":
         menu.message_id = 999
     elif invalid == "expired":

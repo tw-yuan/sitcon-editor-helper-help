@@ -414,7 +414,7 @@ class Gateway:
         if command and command != "ta":
             return
         event = f"telegram:{update.update_id}"
-        thread = message.message_thread_id
+        thread = choice.entry.thread_id if choice else message.message_thread_id
         if not await self.store.claim_event(event, chat.id, thread, user.id, message.message_id):
             return
         # Feedback starts while queued; callbacks have no new user message to react to.
