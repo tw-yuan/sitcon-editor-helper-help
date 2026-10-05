@@ -268,6 +268,51 @@ async def test_resume_document_dispatches_only_original_owner_operation(tools, o
     tools.workflow.create.assert_not_awaited()
 
 
+@pytest.mark.parametrize(
+    "arguments,expected",
+    [
+        ({}, [673, 674]),
+        ({"include_review": True}, [672, 673, 674]),
+        ({"status": "Review"}, [672]),
+        ({"label_filters": ["Status::Review"]}, [672]),
+        ({"open_only": False}, [672, 673, 674, 675]),
+        ({"due_before": "2026-10-05", "assignee_id": 1}, [673]),
+    ],
+)
+async def test_unfinished_search_excludes_review_but_explicit_review_remains_searchable(tools, arguments, expected):
+    from editorial_bot.agent.tools.editorial import Search
+
+    issues = [
+        {"iid": 672, "labels": ["Status::Review"], "state": "opened", "due_date": "2026-10-04"},
+        {"iid": 673, "labels": ["Status::Doing"], "state": "opened", "due_date": "2026-10-05"},
+        {"iid": 674, "labels": ["Status::Report"], "state": "opened", "due_date": "2026-10-06"},
+        {"iid": 675, "labels": [], "state": "closed", "due_date": "2026-10-04"},
+    ]
+
+    async def search(**params):
+        return [
+            issue
+            for issue in issues
+            if (params["state"] == "all" or issue["state"] == params["state"])
+            and (not params.get("labels") or params["labels"] in issue["labels"])
+        ]
+
+    tools.gl.search = AsyncMock(side_effect=search)
+    tools.gl.labels = AsyncMock(return_value=[{"name": "Status::Review"}, {"name": "Status::Doing"}])
+    result = await tools.search(Search(**arguments), context())
+    assert [issue["iid"] for issue in result] == expected
+    if arguments.get("assignee_id"):
+        assert tools.gl.search.call_args.kwargs["assignee_id"] == 1
+
+
+async def test_only_review_cards_means_no_unfinished_work(tools):
+    from editorial_bot.agent.tools.editorial import Search
+
+    tools.gl.search = AsyncMock(return_value=[{"iid": 672, "labels": [tools.settings.review_status]}])
+    assert await tools.search(Search(assignee_id=1), context()) == []
+    tools.gl.update.assert_not_awaited()
+
+
 async def test_card_only_review_does_not_infer_document_from_title_or_label(tools):
     issue = await tools.gl.resolve("1")
     issue.update(title="文案規劃", description="僅開卡")

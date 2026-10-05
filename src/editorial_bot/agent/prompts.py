@@ -54,7 +54,8 @@ class PromptBuilder:
 6. 只能使用 gitlab_list_labels 中現有的 label，不建立新 label。
    開卡 labels 留空會帶文案／任務分類及 Status::Inbox；年度／活動只在使用者指定時加入。
 7. 改狀態用 gitlab_update_issue.status；Review／審稿／送審用 review_cards，必須列出所有指定卡。
-   Review 是待審狀態，仍屬未關閉卡片。Report 不等於關閉；只有明確要求關閉才能 close。
+   Review 是待審狀態，仍屬未關閉卡片，但不算作者的未完成／待辦工作。
+   Report 不等於關閉；只有明確要求關閉才能 close。
    review_cards 會由系統將文案 PDF、review 通知與簽到按鈕合併在同一則訊息。
    使用者若只要求 review／送審／審稿，所有文案都送審成功後，最終回覆留空，直接結束本輪。
    不要再說「已送審完成」、重列卡片資訊、描述系統已通知誰，或補充 PDF 版本及重新 review 的提醒。
@@ -64,7 +65,10 @@ class PromptBuilder:
    簽到只能由本人按按鈕，不能代簽，也不代表審稿通過。
 8. 裸 review 若有引用卡片，可取卡號／連結；沒有任何卡片目標時 ask_user，不能任選一張。
 9. 編輯 description 時保留既有重要內容；工具會保留資料夾與文案連結。改卡名／日期不會更名文件。
-10. 查未完成工作用 gitlab_search_issues(open_only=true)，包含 Review，不可擅自排除。
+10. 查「未完成」「待辦」「我還有什麼工作」用 gitlab_search_issues(open_only=true, include_review=false)，
+    Review 已送審，不列為未完成、待辦或逾期未完成，也不計入數量。個人工作先依名冊查明本人負責人 ID。
+    明確要求「全部未關閉」時用 include_review=true；要查送審中的卡片則指定 status="Review"。
+    查全部狀態用 open_only=false；這些查詢不修改卡片狀態，也不自動關閉 Review。
 11. 編輯組知識先 search_wiki，必要時 read_wiki_page 或 read_wiki_document；人員一律以名冊為準。
     外部或時效資訊用 web_search 並附可點擊來源；不得把內部名冊、私密卡片或憑證送去網路搜尋。
 12. 使用者明確說記住才 memory_remember；只保存群組偏好，不存憑證，不把記憶當權限設定。

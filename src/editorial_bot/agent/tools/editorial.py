@@ -64,6 +64,10 @@ class Search(Args):
     assignee_id: int | None = Field(None, gt=0)
     status: str | None = None
     open_only: bool = True
+    include_review: bool = Field(
+        False,
+        description="未完成／待辦預設排除 Review；明確查全部未關閉卡片時設 true。指定 Review 狀態或標籤會自動包含。",
+    )
     due_before: date | None = None
 
 
@@ -302,6 +306,8 @@ class EditorialTools:
         if args.title_query:
             params["search"] = args.title_query
         rows = await self.gl.search(**params)
+        if args.open_only and not args.include_review and self.settings.review_status not in labels:
+            rows = [i for i in rows if self.settings.review_status not in i.get("labels", [])]
         if args.due_before:
             rows = [i for i in rows if i.get("due_date") and date.fromisoformat(i["due_date"]) <= args.due_before]
         return [
@@ -531,7 +537,12 @@ class EditorialTools:
             ),
             FunctionTool("resume_operation", "接續自己在本群未完成的開卡或補建文案操作。", Resume, self.resume),
             FunctionTool("gitlab_get_issue", "讀取卡片、關聯卡及選用人工留言。", Issue, self.get),
-            FunctionTool("gitlab_search_issues", "查卡；未關閉包含 Review，支援條件篩選。", Search, self.search),
+            FunctionTool(
+                "gitlab_search_issues",
+                "查卡；預設查未完成工作，排除 Review。全部未關閉用 include_review=true；也可明確指定 Review 狀態。",
+                Search,
+                self.search,
+            ),
             FunctionTool(
                 "gitlab_update_issue",
                 "更新卡片欄位、既有 label、負責人或狀態；Review 自動通知總副召。",
