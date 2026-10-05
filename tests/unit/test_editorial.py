@@ -1,4 +1,5 @@
 import json
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -147,6 +148,36 @@ async def test_creator_lookup_outage_does_not_silently_fall_back_or_create(tools
     with pytest.raises(RemoteError):
         await tools.create(args, ctx)
     tools.workflow.create.assert_not_awaited()
+
+
+@pytest.mark.parametrize("word,day", [("今天", 6), ("明天", 7), ("後天", 8)])
+async def test_create_accepts_relative_deadline_without_confirmation(tools, word, day):
+    args, ctx = await prepare_create(tools)
+    ctx.reference_time = datetime(2026, 10, 5, 16, 30, tzinfo=UTC)
+    ctx.text = f"小石開卡 test，{word}到期"
+    args.due_date = f"2026-10-{day:02d}"
+    await tools.create(args, ctx)
+    assert tools.workflow.create.call_args.args[0]["due_date"] == args.due_date
+
+
+@pytest.mark.parametrize("correct", [True, False])
+async def test_update_validates_relative_deadline_before_gitlab_write(tools, correct):
+    from editorial_bot.agent.tools.editorial import Update
+
+    ctx = context()
+    ctx.reference_time = datetime(2026, 12, 31, 10, tzinfo=UTC)
+    ctx.text = "小石，把 #1 到期日改成後天"
+    issue = await tools.gl.resolve("1")
+    tools.gl.get = AsyncMock(return_value=issue)
+    tools.gl.update.return_value = issue
+    args = Update(iid=1, due_date=date(2027, 1, 2 if correct else 3))
+    if correct:
+        await tools.update(args, ctx)
+        assert tools.gl.update.call_args.kwargs["due_date"] == "2027-01-02"
+    else:
+        with pytest.raises(ValueError, match="到期日"):
+            await tools.update(args, ctx)
+        tools.gl.update.assert_not_awaited()
 
 
 @pytest.mark.parametrize("document,folder", [(True, True), (True, False), (False, True), (False, False)])

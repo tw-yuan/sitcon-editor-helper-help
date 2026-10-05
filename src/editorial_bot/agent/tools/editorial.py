@@ -30,7 +30,9 @@ class Person(Args):
 
 class Create(Args):
     title: str = Field(min_length=1, max_length=255)
-    due_date: str = Field(description="使用者明確指定日期轉成 YYYY-MM-DD；未給年份用台灣當前年份。")
+    due_date: str = Field(
+        description="轉成 YYYY-MM-DD；今天／明天／後天用本輪台灣日期基準換算，不需補問；未給年份用台灣當前年份。"
+    )
     document: bool = Field(
         True,
         description="預設 true，建立 GitLab 卡片、Drive 資料夾與範本 Docs；明確要求只開卡或不要文件才為 false。",
@@ -69,7 +71,7 @@ class Update(Args):
     iid: int = Field(gt=0)
     title: str | None = Field(None, min_length=1, max_length=255)
     description: str | None = None
-    due_date: date | None = None
+    due_date: date | None = Field(None, description="YYYY-MM-DD；今天／明天／後天依本輪台灣日期基準換算。")
     clear_due_date: bool = False
     set_assignee_ids: list[int] | None = None
     add_labels: list[str] = Field(default_factory=list)
@@ -227,7 +229,7 @@ class EditorialTools:
     async def create(self, args, ctx):
         from ...services.dates import validate_explicit_date
 
-        validate_explicit_date(ctx.text, args.due_date, self.settings.tz)
+        validate_explicit_date(ctx.text, args.due_date, self.settings.tz, reference_time=ctx.reference_time)
         roster = await self.roster.get()
         ids = args.assignee_ids or [roster.default_member().gitlab_id]
         await self.members_for_ids(ids)
@@ -307,6 +309,12 @@ class EditorialTools:
         ]
 
     async def update(self, args, ctx):
+        from ...services.dates import validate_explicit_date
+
+        if args.due_date:
+            validate_explicit_date(
+                ctx.text, args.due_date.isoformat(), self.settings.tz, reference_time=ctx.reference_time
+            )
         payload = args.model_dump(mode="json")
 
         async def execute(_key):

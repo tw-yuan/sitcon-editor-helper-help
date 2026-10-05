@@ -90,7 +90,7 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 
 `create_card.document` 預設為 `true`，一般開卡建立 GitLab Issue、Drive 資料夾與範本 Docs。只有使用者明確要求「僅開卡／只開卡／不要資料夾、文案或文件」時才設為 `false`。不因標題、圖片或 label 自行略過文件；兩種模式仍使用 Sheets 名冊查核負責人。這個預設依 2026-10-05 的需求調整，既有操作保存的 `document=false` 不會被覆寫，重試仍遵守當時的選擇。
 
-1. 使用者提供標題與明確到期日。支援獨立四位數 MMDD；「小石開卡 0925 test」直接解析為當年 09/25 到期、標題 test，無需補問。MMDD 使用真實日曆驗證，卡號及較長識別碼不當作日期。缺年份用台灣當前年份；相對日期補問。日期必須真實存在，也必須出現在使用者的指令／續接脈絡中。
+1. 使用者提供標題與到期日。支援獨立四位數 MMDD；「小石開卡 0925 test」直接解析為當年 09/25 到期、標題 test，無需補問。MMDD 使用真實日曆驗證，卡號及較長識別碼不當作日期。缺年份用台灣當前年份；「今天／今日、明天／明日、後天（也接受后天）」依本輪台灣日期加 0、1、2 日直接換算，跨月、跨年及閏年依日曆處理，不另問同意。「下週某天、過幾天」等無法唯一確定日期才補問。日期必須來自使用者的指令／續接脈絡，不接受模型編造的日期。
 2. 將指定 Telegram username 對應名冊 GitLab ID；未指定時採唯一 `default=yes`，回覆明示。
 3. 驗證所有 label 已存在。未指定 label 時，文案卡套 `社群文案`、任務卡套 `編輯組專案`；沒有指定狀態時加 `Status::Inbox`。不自動加年度 label。
 4. 僅開卡略過所有 Drive／Docs 呼叫。建立文案時才預檢 Shared Drive 根目錄、建立權限、範本可複製及必要欄位。
@@ -101,6 +101,8 @@ questions.py 在記憶體保存隨機識別碼、原提問者、群組、topic�
 9. 保存 Issue／資料夾／文件對照，回覆實際網址與操作 ID；僅開卡的 `folder_id`、`document_id` 與對應 URL 為空值，不產生空連結。
 
 建立者由程式依 Telegram 數字 ID（優先）或精確 username 查名冊，再用 GitLab ID 查實際 username，寫入 `建立者：@username`，不由模型猜帳號，也不取負責人當建立者。名冊無對應或 GitLab 回 404 才回退為 `Telegram：` 加不會觸發 GitLab mention 的 username 純顯示；無 Telegram username 則顯示 Telegram ID。GitLab 權限、限流、連線等查詢錯誤不視為沒有帳號，會在建立資源前停止。GitLab Issue 的系統作者仍是執行 API 的 service account，描述內另行標註真正提出開卡需求的人。
+
+每輪 ToolContext 保存一次 `reference_time`，PromptBuilder 將它轉成設定時區（預設 Asia/Taipei），列出今天、明天與後天對應的 ISO 日期。開卡與修改到期日共用同一時間基準驗證，避免模型處理跨過午夜後，提示與後端各用不同日期。工具與 GitLab 仍傳 YYYY-MM-DD；相對日期只在理解輸入時換算，既有操作接續沿用已保存的日期。清除日期仍須明確使用原有 `clear_due_date`。
 
 建立文案時，每張卡的資料夾獨立，不以名稱查找合併：相同 `MMDD_TITLE` 仍可能是不同年度或不同工作。重試以操作識別及 Drive `appProperties` 對應資源。既有卡片的資料夾不會刪除；接續舊版純任務操作時，保留 checkpoint 內已建立的資料夾，不再呼叫 Drive。若舊版 Drive 寫入仍為結果不明，停止並要求人工查核，不跳過未知步驟後直接開新卡。
 

@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 import pytest
 
 from editorial_bot.services.dates import validate_explicit_date
@@ -19,7 +21,7 @@ def test_folder_name_and_utf16_doc_links():
     assert request["range"] == {"startIndex": 4, "endIndex": 4 + len(url), "tabId": "tab1"}
 
 
-@pytest.mark.parametrize("text", ["開卡，明天到期", "開卡", "2026/02/30 開卡"])
+@pytest.mark.parametrize("text", ["開卡，下週某天到期", "開卡", "2026/02/30 開卡"])
 def test_no_guessing_dates(text):
     with pytest.raises(ValueError):
         validate_explicit_date(text, "2026-09-25", "Asia/Taipei")
@@ -65,3 +67,56 @@ def test_compact_date_does_not_guess_a_future_year():
     year = datetime.now(ZoneInfo("Asia/Taipei")).year
     with pytest.raises(ValueError):
         validate_explicit_date("小石開卡 0925 test", f"{year + 1}-09-25", "Asia/Taipei")
+
+
+@pytest.mark.parametrize(
+    "word,expected",
+    [
+        ("今天", "2026-10-06"),
+        ("今日", "2026-10-06"),
+        ("明天", "2026-10-07"),
+        ("明日", "2026-10-07"),
+        ("後天", "2026-10-08"),
+        ("后天", "2026-10-08"),
+    ],
+)
+def test_relative_dates_use_taiwan_day_instead_of_utc(word, expected):
+    reference = datetime(2026, 10, 5, 16, 30, tzinfo=UTC)
+    validate_explicit_date(f"小石開卡 公告 DDL {word}", expected, "Asia/Taipei", reference_time=reference)
+    with pytest.raises(ValueError):
+        validate_explicit_date(f"小石開卡 公告 DDL {word}", "2026-10-05", "Asia/Taipei", reference_time=reference)
+
+
+@pytest.mark.parametrize(
+    "reference,word,expected",
+    [
+        ("2026-10-31T10:00:00+08:00", "明天", "2026-11-01"),
+        ("2026-12-31T10:00:00+08:00", "後天", "2027-01-02"),
+        ("2028-02-28T10:00:00+08:00", "明天", "2028-02-29"),
+        ("2027-02-28T10:00:00+08:00", "明天", "2027-03-01"),
+    ],
+)
+def test_relative_dates_follow_calendar_boundaries(reference, word, expected):
+    validate_explicit_date(word, expected, "Asia/Taipei", reference_time=datetime.fromisoformat(reference))
+
+
+@pytest.mark.parametrize("text", ["下週某天到期", "過幾天到期", "大後天到期", "大后天到期", "開卡"])
+def test_unsupported_relative_dates_do_not_get_a_guessed_deadline(text):
+    with pytest.raises(ValueError):
+        validate_explicit_date(text, "2026-10-07", "Asia/Taipei", reference_time=datetime(2026, 10, 5, tzinfo=UTC))
+
+
+async def test_prompt_and_validator_share_the_same_reference_time():
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from editorial_bot.agent.prompts import PromptBuilder
+
+    reference = datetime(2026, 12, 31, 16, 1, tzinfo=UTC)
+    prompt = await PromptBuilder(
+        SimpleNamespace(tz="Asia/Taipei"), SimpleNamespace(all=AsyncMock(return_value=[]))
+    ).build(chat_id=-1, reference_time=reference)
+    assert "今天／今日=2027-01-01" in prompt
+    assert "明天／明日=2027-01-02" in prompt
+    assert "後天=2027-01-03" in prompt
+    validate_explicit_date("後天", "2027-01-03", "Asia/Taipei", reference_time=reference)

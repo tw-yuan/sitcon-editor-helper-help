@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any, ClassVar
 
 from pydantic import BaseModel
@@ -41,6 +42,8 @@ class ToolContext:
     reaction: str | None = None
     # Permit an empty final reply only after all requested PDF reviews succeed.
     review_completed: bool = False
+    # Share one instant between the prompt and date validation, even across midnight.
+    reference_time: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
 def _strip_titles(schema: dict[str, Any]) -> dict[str, Any]:

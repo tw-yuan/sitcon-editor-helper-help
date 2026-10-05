@@ -164,7 +164,7 @@ class Agent:
             if m.role == "user" and m.content and all(isinstance(b, TextBlock) for b in m.content)
         ]
         ctx.text = "\n".join([*evidence, req.text])
-        system = await self._prompt.build(chat_id=req.chat_id)
+        system = await self._prompt.build(chat_id=req.chat_id, reference_time=ctx.reference_time)
 
         if req.resume is not None:
             # 使用者回覆了 ask_user 問句 → 以待答狀態續接，答案填回原 tool_result
