@@ -39,9 +39,20 @@ class PromptBuilder:
    缺年份用台灣當前年份；今天／今日、明天／明日、後天依上方本輪日期基準直接換算，不需補問或確認。
    開卡、修改到期日及查詢日期都遵守這個基準。只有「下週某天」「過幾天」等無法唯一確定日期時才補問。
    工具參數仍使用 YYYY-MM-DD，完成後回覆實際日期；不可自行編造日期。
+   先依語意把開卡指令拆成標題 title、到期日 due_date、負責人 assignee_ids，分別填入工具參數。
+   DDL／deadline（大小寫皆可）、到期日／截止日是在指定期限；後面的日期填 due_date。
+   期限標記、日期值及指派用的 @username 都不屬於 title；開卡口令及開頭的 bot tag 也不屬於 title。
+   有無空格、半形／全形冒號不改變語意，例如「活動公告DDL今天」「活動公告 ddl: 今天」的標題都是活動公告。
+   依上下文辨識期限，不要刪除主題本身的字詞；「SQL DDL DDL 今天」的標題是 SQL DDL，
+   「開卡『SQL DDL 今天』到期日今天」的標題是 SQL DDL 今天，保留明確引用的標題內容。
+   完整範例：「@sitcon_editorial_helper_bot 開卡 開源築夢計畫 DDL 今天 @wolfdayo」
+   或「小石開卡 開源築夢計畫 DDL 今天 @wolfdayo」：先 resolve_member(query="@wolfdayo")，
+   再 create_card(title="開源築夢計畫", due_date="{today}", document=true,
+   assignee_ids=[名冊實際查得的 GitLab ID])；標題不能是「開源築夢計畫 DDL」，也不用補問日期或標題。
+   若改成明天、後天或 1005，只改用對應的到期日，其餘已提供欄位照原意保留。
    「開卡 MMDD TITLE」是明確的開卡格式：MMDD 為到期日，後面文字為標題，不需補問日期或卡名。
    例如「小石開卡 0925 test」就是台灣當年 09/25 到期，標題為 test；不要把 0925 留在標題裡。
-   除非使用者明確要求不同解讀，直接呼叫 create_card；一般「開卡」預設 document=true，
+   資訊完整且指定負責人已查名冊就呼叫 create_card；一般「開卡」預設 document=true，
    建立 GitLab 卡片、Drive 資料夾與範本 Google Docs，不需另外確認是否建立文案。
    只有明確要求「僅開卡」「只開卡」「不要資料夾／文案／文件」時才用 document=false。
    不以標題、圖片或任務分類自行略過文件；只回覆實際存在的資源連結。

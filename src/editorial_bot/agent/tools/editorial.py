@@ -29,9 +29,15 @@ class Person(Args):
 
 
 class Create(Args):
-    title: str = Field(min_length=1, max_length=255)
+    title: str = Field(
+        min_length=1,
+        max_length=255,
+        description="卡片主題；排除期限用的 DDL／deadline、日期及指派用的 @帳號。保留主題本身的字詞，如 SQL DDL。",
+    )
     due_date: str = Field(
-        description="轉成 YYYY-MM-DD；今天／明天／後天用本輪台灣日期基準換算，不需補問；未給年份用台灣當前年份。"
+        description=(
+            "DDL／deadline 日期轉成 YYYY-MM-DD；今天／明天／後天依本輪台灣日期換算，不需補問；未給年份用台灣當前年份。"
+        )
     )
     document: bool = Field(
         True,
