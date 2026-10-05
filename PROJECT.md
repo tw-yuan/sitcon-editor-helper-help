@@ -281,6 +281,14 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 - 重建後的 Docker 測試映像通過 271 項測試，Ruff check 與 format check 通過；正式映像建置成功。真實模型驗收需另取得外部資料傳送授權，不列為已通過。
 - 正式 bot 容器已重建並啟動，紀錄出現 `Editorial bot ready` 與 `Application started`。容器內文案預設為 `true`、補建工具可用，五個修改程式檔的 SHA-256 與工作目錄一致；沿用原資料卷及環境設定。
 
+### 2026-10-05 相對日期、補問續接與待辦分類
+
+- 今天／明天／後天依同一輪台灣時間直接換算，覆蓋 UTC 與台灣日期不同、跨月、跨年及閏年；保留明確日期與 MMDD 支援，模糊日期仍補問。
+- 文字回覆脈絡遺失的 6 個案例及多輪補問答案遺失的 2 個案例，均先重現再修正；一般群組不以回覆串 ID 當 topic，論壇的原話題／原操作者限制仍有效。
+- 預設未完成查詢在後端排除 Review；明確 Review、全部未關閉及所有狀態查詢仍可取得送審卡，未修改實際卡片狀態。
+- 重建後的無網路 Docker 測試映像通過 310 項測試，Ruff check 及 format check 通過。真實模型驗收仍未執行，沒有建立測試卡片、文件或發送測試通知。
+- 正式 bot 已重建，啟動紀錄顯示 `Editorial bot ready`、`Application started`；容器 running、restart count 0，六個修改程式檔的 SHA-256 與提交內容一致。保留既有資料卷及環境設定，沒有新增依賴、環境變數或 migration；重啟前的短期補問需重新提出需求。
+
 ### 先前交付紀錄
 
 - 164 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
