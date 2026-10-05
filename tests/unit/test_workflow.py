@@ -41,7 +41,6 @@ async def setup(tmp_path):
         "document": True,
         "labels": issue["labels"],
         "assignee_ids": [1],
-        "requester": "@writer",
     }
     yield workflow, google, gitlab, store, ctx, payload
     await store.close()
@@ -91,7 +90,7 @@ async def test_task_card_only_creates_gitlab_issue_even_if_drive_is_unavailable(
     description = gitlab.create.call_args.args[0]["description"]
     assert "資料夾：" not in description and "文案：" not in description
     assert "editorial-resources" not in description
-    assert "建立者：@writer" in description and "editorial-operation:" in description
+    assert "建立者：" not in description and "editorial-operation:" in description
     resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
     assert resource["folder_id"] is None and resource["document_id"] is None
     assert await workflow.create(payload, ctx) == result
@@ -119,11 +118,14 @@ async def test_unknown_write_can_recover_using_remote_operation_marker(setup):
 
 @pytest.mark.parametrize("document", [True, False])
 async def test_resource_links_render_as_separate_paragraphs(setup, document):
-    workflow, _google, gitlab, _store, ctx, payload = setup
+    workflow, _google, gitlab, store, ctx, payload = setup
+    # Historical payloads may still include requester metadata; it must not be rendered.
     payload.update(document=document, requester="@gitlab_writer", description="原有說明")
     await workflow.create(payload, ctx)
     description = gitlab.create.call_args.args[0]["description"]
-    assert "\n\n建立者：@gitlab_writer\n\n" in description
+    assert "建立者：" not in description and "@gitlab_writer" not in description
+    assert "\n\n<!-- editorial-operation:" in description
+    assert (await store.one("SELECT user_id FROM operations"))["user_id"] == ctx.user_id
     if document:
         assert "\n\n資料夾：https://drive.google.com/drive/folders/folder\n\n" in description
         assert "\n\n文案：https://docs.google.com/document/d/doc/edit\n\n" in description
@@ -155,11 +157,13 @@ async def test_task_card_unknown_gitlab_write_resumes_without_google_or_duplicat
 async def test_legacy_task_resume_preserves_existing_folder_without_google_calls(setup):
     workflow, google, gitlab, store, ctx, payload = setup
     payload["document"] = False
+    payload["requester"] = "@legacy_writer"
     op = await store.operation("legacy-task", ctx.event_id, ctx.chat_id, ctx.user_id, "create_card", payload)
     await store.checkpoint(op["id"], {"folder": {"id": "old-folder"}}, "error")
     result = await workflow.create(payload, ctx, resume_id=op["id"])
     assert result["folder_url"].endswith("/old-folder")
     assert result["folder_url"] in gitlab.create.call_args.args[0]["description"]
+    assert "建立者：" not in gitlab.create.call_args.args[0]["description"]
     assert (await store.one("SELECT folder_id FROM resources"))["folder_id"] == "old-folder"
     for method in vars(google).values():
         method.assert_not_awaited()

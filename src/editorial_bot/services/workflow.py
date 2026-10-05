@@ -120,7 +120,6 @@ class CardWorkflow:
                     for x in [
                         payload.get("description", ""),
                         resource_links(folder["id"] if folder else None, doc["id"] if doc else None),
-                        f"建立者：{payload['requester']}",
                         f"<!-- {marker} -->",
                     ]
                     if x

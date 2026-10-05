@@ -99,12 +99,12 @@ Agent 續接時，除原始使用者訊息，也依原 `ask_user` 呼叫 ID 取�
 3. 驗證所有 label 已存在。未指定 label 時，文案卡套 `社群文案`、任務卡套 `編輯組專案`；沒有指定狀態時加 `Status::Inbox`。不自動加年度 label。
 4. 僅開卡略過所有 Drive／Docs 呼叫。建立文案時才預檢 Shared Drive 根目錄、建立權限、範本可複製及必要欄位。
 5. 建立文案時，在固定根目錄建立到期日 `MMDD_TITLE` 資料夾並複製範本到其中，文件名稱同為 `MMDD_TITLE`。
-6. 建立 GitLab Issue。description 包含原說明、建立者及操作識別；只有實際存在的資料夾／文案才加入連結。各項以空行分段，避免 GitLab 將一般換行合併顯示。
+6. 建立 GitLab Issue。description 包含原說明與操作識別，不自動附加建立者署名；只有實際存在的資料夾／文案才加入連結。各項以空行分段，避免 GitLab 將一般換行合併顯示。
 7. 讀回 Issue，驗證 labels 與所有負責人。GitLab 若不接受多人，不把部分成功說成全部成功。
 8. 若有建立文案，在文件填入 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK`，並設定兩個 URL 為可點擊連結。保留其他範本正文。
 9. 保存 Issue／資料夾／文件對照，回覆實際網址與操作 ID；僅開卡的 `folder_id`、`document_id` 與對應 URL 為空值，不產生空連結。
 
-建立者由程式依 Telegram 數字 ID（優先）或精確 username 查名冊，再用 GitLab ID 查實際 username，寫入 `建立者：@username`，不由模型猜帳號，也不取負責人當建立者。名冊無對應或 GitLab 回 404 才回退為 `Telegram：` 加不會觸發 GitLab mention 的 username 純顯示；無 Telegram username 則顯示 Telegram ID。GitLab 權限、限流、連線等查詢錯誤不視為沒有帳號，會在建立資源前停止。GitLab Issue 的系統作者仍是執行 API 的 service account，描述內另行標註真正提出開卡需求的人。
+新卡片不自動寫入 `建立者：@username`，也不附加 Telegram username／ID 署名，開卡不再為署名查詢提問者的 GitLab 帳號。負責人的名冊驗證與指派維持原流程。真正的操作者仍保存於 SQLite operations、events 及 audit_log，供權限與操作追蹤；GitLab Issue 的系統作者仍是執行 API 的 service account。舊操作 payload 中的 requester 欄位可以保留，接續建立新卡時不會將它寫入說明；已存在的卡片內容不批次清除。
 
 每輪 ToolContext 保存一次 `reference_time`，PromptBuilder 將它轉成設定時區（預設 Asia/Taipei），列出今天、明天與後天對應的 ISO 日期。開卡與修改到期日共用同一時間基準驗證，避免模型處理跨過午夜後，提示與後端各用不同日期。工具與 GitLab 仍傳 YYYY-MM-DD；相對日期只在理解輸入時換算，既有操作接續沿用已保存的日期。清除日期仍須明確使用原有 `clear_due_date`。
 

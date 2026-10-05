@@ -113,41 +113,17 @@ async def prepare_create(tools, *, username="author_one", user_id=7):
     return args, ToolContext(-1, 3, user_id, username, "小石開卡 0925 test", event_id="create")
 
 
-async def test_creator_mentions_gitlab_account_from_roster_not_assignee(tools):
-    args, ctx = await prepare_create(tools, username="AUTHOR_ONE")
-    await tools.create(args, ctx)
-    tools.gl.user_username.assert_awaited_once_with(1)
-    payload = tools.workflow.create.call_args.args[0]
-    assert payload["requester"] == "@gitlab_author"
-    assert payload["assignee_ids"] == [2]
-
-
-async def test_creator_prefers_numeric_telegram_identity(tools):
-    args, ctx = await prepare_create(tools, username=None)
-    tools.roster.get.return_value.members[0].telegram_id = ctx.user_id
-    await tools.create(args, ctx)
-    tools.gl.user_username.assert_awaited_once_with(1)
-    assert tools.workflow.create.call_args.args[0]["requester"] == "@gitlab_author"
-
-
-@pytest.mark.parametrize("missing", ["roster", "gitlab", "telegram"])
-async def test_creator_telegram_fallback_does_not_mention_unrelated_gitlab_user(tools, missing):
-    username = "outside_user" if missing == "roster" else None if missing == "telegram" else "author_one"
+@pytest.mark.parametrize("username", ["AUTHOR_ONE", "outside_user", None])
+async def test_create_does_not_lookup_or_add_creator(tools, username):
     args, ctx = await prepare_create(tools, username=username)
-    tools.gl.user_username.return_value = None
-    await tools.create(args, ctx)
-    expected = f"Telegram：`@{username}`" if username else "Telegram ID：7"
-    assert tools.workflow.create.call_args.args[0]["requester"] == expected
-    if missing != "gitlab":
-        tools.gl.user_username.assert_not_awaited()
-
-
-async def test_creator_lookup_outage_does_not_silently_fall_back_or_create(tools):
-    args, ctx = await prepare_create(tools)
+    tools.roster.get.return_value.members[0].telegram_id = ctx.user_id
     tools.gl.user_username.side_effect = RemoteError("GitLab", 503)
-    with pytest.raises(RemoteError):
-        await tools.create(args, ctx)
-    tools.workflow.create.assert_not_awaited()
+    await tools.create(args, ctx)
+    tools.gl.user_username.assert_not_awaited()
+    tools.members_for_ids.assert_awaited_once_with([2])
+    payload = tools.workflow.create.call_args.args[0]
+    assert "requester" not in payload
+    assert payload["assignee_ids"] == [2]
 
 
 @pytest.mark.parametrize("word,day", [("今天", 6), ("明天", 7), ("後天", 8)])

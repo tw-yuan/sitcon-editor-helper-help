@@ -75,7 +75,7 @@ Wiki 中的舊成員表不作人員依據。年度 bot 名冊不帶入編輯組�
 
 「開卡＋建立文案」的資料夾與文件使用到期日 `MMDD_TITLE`，例如 `0115_報名開跑`。每卡獨立建立，跨年度同名不自動合併。資料夾放在指定 Drive 根目錄，Docs 放在新資料夾裡。
 
-Issue description 的資料夾、文案與建立者各自分段顯示（使用空行，確保 GitLab 頁面換行）。建立者優先用名冊 GitLab ID 查得的 `@username` 標註；只有名冊無對應或 GitLab 帳號不存在才回退顯示 Telegram username，不誤標同名 GitLab 帳號。查詢失敗不視為沒有帳號。
+Issue description 的原說明、資料夾與文案各自分段顯示（使用空行，確保 GitLab 頁面換行），不自動加上建立者或 Telegram 帳號／ID 署名。負責人照常驗證及指派，操作者身分保留於內部操作與稽核紀錄。既有卡片不批次清除歷史署名。
 
 僅開卡的 Issue description 不加入空的資料夾／文案欄位；開卡＋建立文案則包含資料夾與 Docs 連結。Docs 必含 Issue 連結與資料夾連結，兩者可點擊。使用原範本 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK` 欄位，保留其他正文。
 
