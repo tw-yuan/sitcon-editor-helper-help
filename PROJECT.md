@@ -291,6 +291,14 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 - 重建後的無網路 Docker 測試映像通過 310 項測試，Ruff check 及 format check 通過。真實模型驗收仍未執行，沒有建立測試卡片、文件或發送測試通知。
 - 正式 bot 已重建，啟動紀錄顯示 `Editorial bot ready`、`Application started`；容器 running、restart count 0，六個修改程式檔的 SHA-256 與提交內容一致。保留既有資料卷及環境設定，沒有新增依賴、環境變數或 migration；重啟前的短期補問需重新提出需求。
 
+### 2026-10-05 開卡標題語意與署名
+
+- 新卡不再自動附加建立者署名，也不為此查詢 GitLab username；內部操作者紀錄、負責人驗證及歷史卡片內容保留。回歸案例先重現舊署名行為，再確認新卡與舊操作接續都不寫入署名。
+- DDL／deadline 的欄位解讀改於 agent prompt 與工具參數說明，包含原始完整指令、相對日、指派查名冊及合法 SQL DDL 主題範例；未增加程式清理標題的邏輯。
+- 最終 Docker 測試映像通過 307 項隔離測試，Ruff check 與 format check 通過；正式與測試映像均成功建置。署名的舊帳號轉換案例已改為不查詢／不附加署名的測試。
+- 模型驗收腳本已補上期限標記變體、引用標題及完整帶負責人的指令。真實模型驗收因自動審核拒絕外部資料傳送而未執行，不將離線測試視為模型語意驗收通過；未建立測試卡片、文件或發送測試通知，亦未修改既有 #683。
+- 已部署 `9d7a825` 與 `9aea82c`，啟動紀錄顯示 `Editorial bot ready`、`Application started`，正式容器 running、restart count 0；提示詞、工具及開卡流程三個檔案的 SHA-256 與工作目錄一致。沿用既有資料卷及環境設定，沒有新增依賴、環境變數或 migration。
+
 ### 先前交付紀錄
 
 - 164 項測試於最終 Docker 測試映像通過；Ruff check 與 format check 通過。
