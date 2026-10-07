@@ -282,6 +282,15 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 ## 本次交付驗證
 
+### 2026-10-07 名冊更新、nickname 與使用者更正
+
+- 回歸案例先重現 nickname 被拒絕、改表後仍讀舊 ID、刷新失敗後仍可取舊快取，以及明確 GitLab ID 更正被名冊擋住。修正後唯一暱稱直接查人、同名列候選，查詢／指派／通知即時重讀，明確數字 ID 經 GitLab 查證後可直接使用。
+- 最終隔離測試映像通過 324 項測試；src、tests、scripts 的 Ruff check 與 format check 全部通過。
+- `scripts/check_member_agent.py` 使用合成名冊及真實 `dynamic/sitcon` 模型，六個案例全部通過：nickname、舊拒絕後重查、名冊已更新、一般回覆更正 ID、補問更正 ID、同名候選。擷取開卡參數確認保留原標題、10/11 日期及 `document=false`；未實際開卡或發送通知。
+- 唯讀查核確認當時名冊的「章魚」只有一筆、GitLab ID 為 23265503，且 GitLab 帳號存在；服務預檢確認名冊、Shared Drive、Wiki、標籤及 Telegram 正常，沒有既存 webhook。
+- 已部署 `cb99e2c`、`5be1d05`；2026-10-07 13:41（Asia/Taipei）啟動紀錄顯示 `Editorial bot ready`、`Application started`，容器 running、restart count 0。四個修改程式檔的 SHA-256 與工作目錄一致。
+- 沿用既有資料卷、權限、環境變數與依賴，沒有 migration，也未改名冊或替截圖中的需求建立卡片。重啟前的短期補問需重新提出需求。
+
 ### 2026-10-05 開卡與補問修正
 
 - 補問按鈕新增 6 個真實 Telegram Update 結構的回歸案例，修正前全部重現拒絕；修正後保留原群、原提問者及原問題訊息驗證，並沿用保存的話題接續。
