@@ -4,13 +4,14 @@ import html
 import json
 import re
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ...review_packets import ReviewPackets
 from ...services.gitlab import RemoteError
 from ...services.review_documents import ReviewDocuments
+from ...services.sheets_roster import Member
 from ...services.workflow import operation_key, resource_links
 from .base import Tool
 from .external_data import wrap_external
@@ -24,8 +25,14 @@ class Empty(Args):
     pass
 
 
+GitLabId = Annotated[int, Field(gt=0)]
+
+
 class Person(Args):
-    query: str = Field(min_length=1, description="名冊 nickname、Telegram username（可加 @），或「我」；精確查詢。")
+    query: str = Field(
+        min_length=1,
+        description="名冊 nickname、Telegram username（可加 @）、「我」，或使用者明確提供的 GitLab 數字 ID。",
+    )
 
 
 class Create(Args):
@@ -45,7 +52,9 @@ class Create(Args):
     )
     description: str = ""
     labels: list[str] = Field(default_factory=list, description="精確使用既有 label；空值採文案／任務預設分類。")
-    assignee_ids: list[int] = Field(default_factory=list, description="名冊 GitLab ID；空值使用唯一 default=yes。")
+    assignee_ids: list[GitLabId] = Field(
+        default_factory=list, description="查得的名冊 ID 或使用者明確指定並查證的 GitLab ID；空值使用唯一 default=yes。"
+    )
 
     @field_validator("due_date")
     @classmethod
@@ -83,7 +92,7 @@ class Update(Args):
     description: str | None = None
     due_date: date | None = Field(None, description="YYYY-MM-DD；今天／明天／後天依本輪台灣日期基準換算。")
     clear_due_date: bool = False
-    set_assignee_ids: list[int] | None = None
+    set_assignee_ids: list[GitLabId] | None = None
     add_labels: list[str] = Field(default_factory=list)
     remove_labels: list[str] = Field(default_factory=list)
     status: str | None = Field(None, description="現有狀態，例如 Doing、Review、Report。")
@@ -193,23 +202,35 @@ class EditorialTools:
             await self.store.checkpoint(key, steps, "uncertain" if exc.uncertain else "error", str(exc))
             raise
 
-    async def members_for_ids(self, ids, *, roster=None):
+    @staticmethod
+    def explicit_gitlab_id(user_id, user_text):
+        # ctx.text contains user messages / ask_user answers, never external tool records.
+        return re.search(rf"(?<![A-Za-z0-9_]){user_id}(?![A-Za-z0-9_])", user_text) is not None
+
+    async def members_for_ids(self, ids, *, roster=None, user_text=""):
         roster = roster if roster is not None else await self.roster.get(force=True)
         members = [roster.by_gitlab(i) for i in ids]
-        if any(m is None for m in members):
-            raise ValueError("指定 GitLab ID 不在編輯組名冊，請先用 resolve_member 查證。")
-        # The real roster currently contains IDs that may belong to another platform; verify, never guess.
-        for user_id in ids:
-            response = await self.gl.client.get(f"/users/{user_id}")
-            if response.is_error:
-                raise ValueError(f"名冊 GitLab ID {user_id} 無法在 GitLab 查證，請修正原表或指定其他負責人。")
+        for user_id, member in zip(ids, members, strict=True):
+            if member is None and not self.explicit_gitlab_id(user_id, user_text):
+                raise ValueError("最新名冊查無此 GitLab ID，且使用者未明確提供該 ID；請先 resolve_member，不可猜測。")
+        for index, user_id in enumerate(ids):
+            username = await self.gl.user_username(user_id)
+            if username is None:
+                raise ValueError(f"GitLab 查無使用者 ID {user_id}，請提供正確 ID。")
+            if members[index] is None:
+                # An explicit correction identifies a GitLab account, not a Telegram / roster identity.
+                members[index] = Member(user_id, None, nickname=username, gitlab_username=username)
         return members
 
     async def resolve_member(self, args, ctx):
         from dataclasses import asdict
 
         roster = await self.roster.get(force=True)
-        if args.query.strip() in ("我", "自己", "me"):
+        query = args.query.strip()
+        if re.fullmatch(r"[1-9][0-9]*", query):
+            members = await self.members_for_ids([int(query)], roster=roster, user_text=ctx.text)
+            return asdict(members[0])
+        if query in ("我", "自己", "me"):
             member = roster.by_telegram_id(ctx.user_id)
             matches = [member] if member else roster.search_by_name("@" + (ctx.username or ""))
         else:
@@ -226,7 +247,7 @@ class EditorialTools:
         validate_explicit_date(ctx.text, args.due_date, self.settings.tz, reference_time=ctx.reference_time)
         roster = await self.roster.get(force=True)
         ids = args.assignee_ids or [roster.default_member().gitlab_id]
-        await self.members_for_ids(ids, roster=roster)
+        await self.members_for_ids(ids, roster=roster, user_text=ctx.text)
         labels = args.labels or [
             self.settings.default_document_label if args.document else self.settings.default_task_label
         ]
@@ -251,7 +272,8 @@ class EditorialTools:
         payload = json.loads(op["payload"])
         if op["kind"] == "add_card_document":
             return await self.workflow.add_document(payload["iid"], ctx, resume_id=op["id"])
-        await self.members_for_ids(payload["assignee_ids"])
+        # Saved assignee IDs already passed validation before this operation was persisted.
+        await self.members_for_ids(payload["assignee_ids"], user_text=" ".join(map(str, payload["assignee_ids"])))
         return await self.workflow.create(payload, ctx, resume_id=op["id"])
 
     async def add_document(self, args, ctx):
@@ -321,7 +343,7 @@ class EditorialTools:
             if args.clear_due_date:
                 fields["due_date"] = ""
             if args.set_assignee_ids is not None:
-                await self.members_for_ids(args.set_assignee_ids)
+                await self.members_for_ids(args.set_assignee_ids, user_text=ctx.text)
                 fields["assignee_ids"] = args.set_assignee_ids
             if args.description is not None:
                 old = current.get("description") or ""
@@ -512,7 +534,7 @@ class EditorialTools:
         return [
             FunctionTool(
                 "resolve_member",
-                "即時重讀 Google Sheets，依 nickname、Telegram username 或我查名冊；唯一相符直接使用，同名回傳候選。",
+                "即時重讀名冊，以 nickname、Telegram username 或我查人；也接受使用者明確提供的 GitLab ID 並查證帳號。",
                 Person,
                 self.resolve_member,
             ),

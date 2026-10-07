@@ -68,6 +68,16 @@ docker compose run --rm --no-deps \
 
 開卡解析案例包含 DDL／deadline 的大小寫、空格與冒號，以及保留 SQL DDL 與引用標題。完整 `@bot 開卡 開源築夢計畫 DDL 今天 @wolfdayo` 案例會先唯讀查名冊，再檢查模型提出的標題、日期、負責人 ID 與文案模式，不執行開卡工具。這些模型行為需實際 LLM 驗收才能確認；離線測試不能取代。
 
+僅驗證暱稱、改表與使用者更正 ID 的模型行為，可執行：
+
+```bash
+docker compose run --rm --no-deps \
+  -v "$PWD/scripts:/checks:ro" \
+  --entrypoint /app/.venv/bin/python bot /checks/check_member_agent.py
+```
+
+此腳本使用合成名冊與記憶體資料庫，只連既有模型端點，不存取真實 Google／GitLab／Telegram 資料。開卡工具只擷取參數並中止，檢查 nickname 唯一／同名、舊拒絕後重查、資料表已更新、一般回覆及補問中的明確 ID 更正；所有案例保留原標題、期限與不要文件的要求。
+
 ## 啟動與舊 n8n 切換
 
 先停用舊 n8n 工作流。`--check-services` 中的 `existing_webhook` 應為 `false`；若仍為 `true`，bot 會拒絕啟動，保留既有部署。

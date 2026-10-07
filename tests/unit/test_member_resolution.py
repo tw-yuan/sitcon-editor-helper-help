@@ -5,8 +5,10 @@ import pytest
 
 from editorial_bot.agent.core import Agent
 from editorial_bot.agent.tools.base import ToolContext, ToolRegistry
-from editorial_bot.agent.tools.editorial import Create, EditorialTools, Person
+from editorial_bot.agent.tools.editorial import Create, EditorialTools, Person, Resume, Update
+from editorial_bot.services.gitlab import RemoteError
 from editorial_bot.services.sheets_roster import RosterService
+from editorial_bot.storage.db import Store
 
 
 def sheet(gitlab_id="7036398656", nickname="章魚", username="octopus"):
@@ -16,7 +18,7 @@ def sheet(gitlab_id="7036398656", nickname="章魚", username="octopus"):
 @pytest.fixture
 def tools():
     google = SimpleNamespace(roster_values=AsyncMock(return_value=sheet()))
-    gl = SimpleNamespace(client=SimpleNamespace(get=AsyncMock(return_value=SimpleNamespace(is_error=False))))
+    gl = SimpleNamespace(user_username=AsyncMock(return_value="octopus"))
     settings = SimpleNamespace(
         tz="Asia/Taipei",
         default_task_label="編輯組專案",
@@ -55,7 +57,7 @@ async def test_create_accepts_corrected_id_before_cache_expires(tools):
     payload = tools.workflow.create.call_args.args[0]
     assert payload["assignee_ids"] == [23265503]
     assert payload["document"] is False
-    tools.gl.client.get.assert_awaited_once_with("/users/23265503")
+    tools.gl.user_username.assert_awaited_once_with(23265503)
 
 
 async def test_default_assignee_is_refreshed_before_creation(tools):
@@ -80,3 +82,77 @@ async def test_requester_note_refreshes_identity_and_never_uses_nickname_as_user
     note = await agent._requester_note(context())
     assert "gitlab_id=10" not in note
     assert "resolve_member" in note
+
+
+async def test_explicit_gitlab_correction_does_not_require_editing_roster_first(tools):
+    tools.gl.user_username = AsyncMock(return_value="octopus")
+    ctx = context()
+    ctx.text += "\nGitLab ID 更正為 23265503"
+    member = await tools.resolve_member(Person(query="23265503"), ctx)
+    assert member["gitlab_id"] == 23265503
+    assert member["gitlab_username"] == "octopus"
+    assert member["telegram_username"] is None
+    await tools.create(
+        Create(title="製作 IG 精選動態封面", due_date="2026-10-11", document=False, assignee_ids=[23265503]), ctx
+    )
+    assert tools.workflow.create.call_args.args[0]["assignee_ids"] == [23265503]
+
+
+@pytest.mark.parametrize("text", ["指定章魚", "ID 123265503", "@account_23265503"])
+async def test_unlisted_id_without_exact_user_input_is_not_guessed(tools, text):
+    ctx = context()
+    ctx.text = text
+    with pytest.raises(ValueError, match="使用者"):
+        await tools.resolve_member(Person(query="23265503"), ctx)
+    tools.gl.user_username.assert_not_awaited()
+
+
+@pytest.mark.parametrize("error", [None, RemoteError("GitLab", 503)])
+async def test_explicit_id_must_be_verified_and_outage_is_not_roster_absence(tools, error):
+    tools.gl.user_username = AsyncMock(return_value=None, side_effect=error)
+    ctx = context()
+    ctx.text += "\n23265503"
+    with pytest.raises(RemoteError if error else ValueError) as caught:
+        await tools.create(Create(title="test", due_date="2026-10-11", document=False, assignee_ids=[23265503]), ctx)
+    assert "不在編輯組名冊" not in str(caught.value)
+    tools.workflow.create.assert_not_awaited()
+
+
+async def test_assignment_update_uses_fresh_roster(tools, tmp_path):
+    tools.store = await Store.open(str(tmp_path / "db.sqlite3"))
+    try:
+        await tools.roster.get()
+        tools.google.roster_values.return_value = sheet(str(23265503))
+        tools.gl.get = AsyncMock(return_value={"iid": 9, "labels": []})
+        tools.gl.update = AsyncMock(return_value={"iid": 9, "labels": [], "web_url": "https://gitlab.test/issues/9"})
+        await tools.update(Update(iid=9, set_assignee_ids=[23265503]), context())
+        assert tools.gl.update.call_args.kwargs["assignee_ids"] == [23265503]
+        tools.gl.user_username.assert_awaited_once_with(23265503)
+    finally:
+        await tools.store.close()
+
+
+async def test_resume_keeps_previously_validated_explicit_assignee(tools, tmp_path):
+    tools.store = await Store.open(str(tmp_path / "db.sqlite3"))
+    try:
+        ctx = context()
+        key = "a" * 24
+        payload = {"title": "test", "due_date": "2026-10-11", "assignee_ids": [23265503], "document": False}
+        await tools.store.operation(key, "original", ctx.chat_id, ctx.user_id, "create_card", payload)
+        ctx.text = f"接續操作 {key}"
+        await tools.resume(Resume(operation_id=key), ctx)
+        tools.gl.user_username.assert_awaited_once_with(23265503)
+        assert tools.workflow.create.call_args.args[0]["assignee_ids"] == [23265503]
+    finally:
+        await tools.store.close()
+
+
+async def test_old_id_is_rejected_after_roster_change_unless_user_explicitly_supplied_it(tools):
+    await tools.roster.get()
+    tools.google.roster_values.return_value = sheet("23265503")
+    with pytest.raises(ValueError, match="使用者未明確提供"):
+        await tools.create(
+            Create(title="test", due_date="2026-10-11", document=False, assignee_ids=[7036398656]), context()
+        )
+    tools.gl.user_username.assert_not_awaited()
+    tools.workflow.create.assert_not_awaited()
