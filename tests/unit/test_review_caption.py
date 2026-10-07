@@ -21,6 +21,7 @@ async def test_review_sends_pdf_notice_and_button_in_one_message(tmp_path):
         notice = (
             "這是由 @Mina430 負責的 #676 教師節&amp;預告10月徵稿 文案，請 @Nathan2045、@yorukot 幫忙 review\n"
             "文案：https://docs.google.com/document/d/document/edit\n"
+            "資料夾：https://drive.google.com/drive/folders/folder\n"
             "卡片：https://gitlab.com/sitcon-tw/editorial/board/-/work_items/676"
         )
         key = await reviews.prepare("a" * 24, ctx, {"iid": 676, "title": "教師節"}, "document", notice)

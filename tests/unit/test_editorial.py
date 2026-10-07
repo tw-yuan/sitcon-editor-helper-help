@@ -61,7 +61,8 @@ async def test_review_all_targets_tags_author_and_both_chiefs_once(tools):
     assert ctx.review_completed
     for notice in ctx.notices:
         assert "@author_one" in notice and "@chief_one" in notice and "@deputy_one" in notice
-        assert "&lt;標題&gt;" in notice and "資料夾：" not in notice
+        assert "&lt;標題&gt;" in notice
+        assert "資料夾：https://drive.google.com/drive/folders/folder" in notice
 
 
 async def test_ambiguous_review_target_stops_entire_batch(tools):
@@ -170,12 +171,24 @@ async def test_review_labels_each_available_link_on_its_own_line(tools, document
     expected = []
     if document:
         expected.append(f"文案：{doc_url}")
+    if folder:
+        expected.append(f"資料夾：{folder_url}")
     expected.append(f"卡片：{issue['web_url']}")
     assert ctx.notices[0].splitlines()[1:] == expected
     assert ctx.review_completed is document
     tools.gl.update.assert_awaited_once_with(1, add_labels=["Status::Review"])
     saved = await tools.store.one("SELECT result FROM operations WHERE kind='review'")
     assert json.loads(saved["result"])["notification"] == ctx.notices[0]
+
+
+async def test_review_folder_link_uses_persisted_resource_before_description(tools):
+    await tools.store.execute("INSERT INTO resources VALUES (1,'saved-folder','doc','created')")
+    ctx = context()
+    await tools.review(Review(targets=["1"]), ctx)
+    assert "資料夾：https://drive.google.com/drive/folders/saved-folder" in ctx.notices[0]
+    assert "https://drive.google.com/drive/folders/folder" not in ctx.notices[0]
+    packet = await tools.store.one("SELECT notice FROM review_packets WHERE issue_iid=1")
+    assert packet["notice"] == ctx.notices[0]
 
 
 async def test_review_pdf_export_failure_stops_status_updates_for_whole_batch(tools):

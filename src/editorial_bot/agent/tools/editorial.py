@@ -399,9 +399,12 @@ class EditorialTools:
             text = issue.get("description") or ""
             resource = await self.store.one("SELECT * FROM resources WHERE issue_iid=?", (issue["iid"],))
             docs = re.findall(r"https://docs\.google\.com/document/d/[A-Za-z0-9_-]+(?:/edit)?", text)
+            folders = re.findall(r"https://drive\.google\.com/drive/folders/[A-Za-z0-9_-]+", text)
             if resource:
                 if resource["document_id"]:
                     docs = [f"https://docs.google.com/document/d/{resource['document_id']}/edit"]
+                if resource["folder_id"]:
+                    folders = [f"https://drive.google.com/drive/folders/{resource['folder_id']}"]
             if (
                 not docs
                 and resource is None
@@ -422,6 +425,7 @@ class EditorialTools:
             )
             notice += "、".join(dict.fromkeys(mention(m) for m in chiefs)) + " 幫忙 review\n"
             links = [("文案", url) for url in docs[:1]]
+            links.extend(("資料夾", url) for url in folders[:1])
             links.append(("卡片", issue["web_url"]))
             notice += "\n".join(f"{label}：{html.escape(url)}" for label, url in links)
             if missing:
