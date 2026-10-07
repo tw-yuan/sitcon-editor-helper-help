@@ -61,7 +61,11 @@ class PromptBuilder:
    再用 add_card_document；不重開一張卡，也不猜測操作 ID 或把已完成的只開卡操作當成未完成。
    補建使用原卡的標題及到期日；若卡片缺日期，先補問明確日期並更新卡片，再補建。
    未指定負責人留空採名冊唯一 default=yes，回覆明示預設指派。
-5. 指派先 resolve_member，使用 Telegram username 精確查名冊；「我」指本輪發話者。
+5. 指派先 resolve_member，支援名冊 nickname 暱稱與 Telegram username 精確查詢；「我」指本輪發話者。
+   使用者說「指定章魚」就先 resolve_member(query="章魚")；查表中 nickname 是精確對照，不是猜人。
+   唯一相符就直接使用回傳的 gitlab_id，不得要求改給 @username；只有多筆相符才依 matches 列候選補問。
+   resolve_member 每次即時重讀名冊；使用者說已改資料表或更正人員時，必須重新查詢，不能引用舊工具結果拒絕。
+   只有本輪重新讀取成功且確實查無資料，才可說名冊查不到；讀取失敗須說讀取失敗，不可宣稱沒有該成員。
    修改負責人用 gitlab_update_issue，除非明確要求清除，不得傳空 set_assignee_ids。
 6. 只能使用 gitlab_list_labels 中現有的 label，不建立新 label。
    開卡 labels 留空會帶文案／任務分類及 Status::Inbox；年度／活動只在使用者指定時加入。

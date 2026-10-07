@@ -53,7 +53,7 @@ SQLite：授權、群組記憶、事件、操作步驟、資源對照、通知�
 
 | 資料 | 權威來源 | 系統如何使用 |
 | --- | --- | --- |
-| 成員、Telegram／GitLab 對照、預設負責人、總副召 | 指定 Google Sheet 的 `gid=0` | 快取 300 秒；不從 Wiki 舊名單推斷。 |
+| 成員、Telegram／GitLab 對照、預設負責人、總副召 | 指定 Google Sheet 的 `gid=0` | 查人、指派及通知前即時重讀；不從 Wiki 舊名單推斷。 |
 | 可用 label、卡片狀態與內容 | `sitcon-tw/editorial/board` | 操作前查證既有 label，操作後讀回。 |
 | 編輯規範與參考連結 | GitLab Wiki | 快取 900 秒；回答附來源，文件過長可分段讀取。 |
 | 文案與附件 | 指定 Drive 根目錄與 Docs 範本 | 選擇建立文案的卡片各自擁有 `MMDD_TITLE` 子資料夾。 |
@@ -62,7 +62,11 @@ SQLite：授權、群組記憶、事件、操作步驟、資源對照、通知�
 
 實際名冊欄位是 `Telegram ID`、`gitlab_id`、`Nickname`、`default`、`note`。`Telegram ID` 的現行資料是 username，不是數字 ID；程式也接受純數字 Telegram ID。`default=yes` 必須唯一；`note` 中的「總召／副召」決定 review 通知。GitLab ID 在指派前再查證是否存在，錯誤資料不猜測替代值。
 
-Wiki 首頁含較舊的人員區段，知識服務會移除該段，提示改查名冊。快取到期後讀取失敗會回報不可用，不以過期人員資料執行指派或群體通知。
+`Nickname`／`nickname` 欄位可作為精確查詢鍵。查詢忽略大小寫與前後空白，同時比對 nickname 及 Telegram username；使用 `@username` 時只比帳號。唯一相符直接回傳成員，重名或 nickname 與別人的 username 撞名時回傳全部候選，請使用者選擇，不要求每個暱稱查詢都另給帳號。「我」仍只比對發話者 Telegram 數字 ID 或 username，避免被其他人的 nickname 誤認。
+
+發話者身分、`resolve_member`、開卡預設負責人、指派驗證及通知都使用強制重新讀取。名冊更新可於下一次查詢／操作生效，不必等待預設 300 秒 TTL 或管理員 `/reload`；單次開卡的預設人員選擇及驗證共用一次讀取的名冊。失敗會清除舊快取並回報讀取錯誤，不能改說查無成員。Agent 提示要求使用者說已改表時重新查詢，不以 reply chain 內舊工具結果拒絕。
+
+Wiki 首頁含較舊的人員區段，知識服務會移除該段，提示改查名冊。不以過期人員資料執行指派或群體通知。
 
 ## 使用與權限
 
@@ -95,7 +99,7 @@ Agent 續接時，除原始使用者訊息，也依原 `ask_user` 呼叫 ID 取�
 `create_card.document` 預設為 `true`，一般開卡建立 GitLab Issue、Drive 資料夾與範本 Docs。只有使用者明確要求「僅開卡／只開卡／不要資料夾、文案或文件」時才設為 `false`。不因標題、圖片或 label 自行略過文件；兩種模式仍使用 Sheets 名冊查核負責人。這個預設依 2026-10-05 的需求調整，既有操作保存的 `document=false` 不會被覆寫，重試仍遵守當時的選擇。
 
 1. 使用者提供標題與到期日。支援獨立四位數 MMDD；「小石開卡 0925 test」直接解析為當年 09/25 到期、標題 test，無需補問。MMDD 使用真實日曆驗證，卡號及較長識別碼不當作日期。缺年份用台灣當前年份；「今天／今日、明天／明日、後天（也接受后天）」依本輪台灣日期加 0、1、2 日直接換算，跨月、跨年及閏年依日曆處理，不另問同意。「下週某天、過幾天」等無法唯一確定日期才補問。日期必須來自使用者的指令／續接脈絡，不接受模型編造的日期。
-2. 將指定 Telegram username 對應名冊 GitLab ID；未指定時採唯一 `default=yes`，回覆明示。
+2. 將指定 nickname 或 Telegram username 精確對應最新名冊的 GitLab ID；同名列候選補問，未指定時採唯一 `default=yes`，回覆明示。
 3. 驗證所有 label 已存在。未指定 label 時，文案卡套 `社群文案`、任務卡套 `編輯組專案`；沒有指定狀態時加 `Status::Inbox`。不自動加年度 label。
 4. 僅開卡略過所有 Drive／Docs 呼叫。建立文案時才預檢 Shared Drive 根目錄、建立權限、範本可複製及必要欄位。
 5. 建立文案時，在固定根目錄建立到期日 `MMDD_TITLE` 資料夾並複製範本到其中，文件名稱同為 `MMDD_TITLE`。
@@ -199,7 +203,7 @@ Agent 文字原本即以 `parse_mode=None` 發送；補問選項改用「選項 
 
 | 工具 | 功能 |
 | --- | --- |
-| resolve_member | 精確查詢名冊身分、解析「我」。 |
+| resolve_member | 即時重讀名冊，以 nickname／Telegram username 精確查人、解析「我」；同名回傳候選。 |
 | create_card／resume_operation | 開卡及接續部分完成的開卡／補建流程。 |
 | add_card_document | 依既有卡號補建資料夾與範本文案，保留原卡並去重。 |
 | gitlab_get_issue | 卡片、關聯卡及選讀留言。 |

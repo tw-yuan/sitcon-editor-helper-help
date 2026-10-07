@@ -1,7 +1,10 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from editorial_bot.services.google import folder_name
-from editorial_bot.services.sheets_roster import RosterUnavailableError, parse_roster
+from editorial_bot.services.sheets_roster import Member, Roster, RosterService, RosterUnavailableError, parse_roster
 
 
 def test_actual_editorial_headers_and_roles():
@@ -18,7 +21,31 @@ def test_actual_editorial_headers_and_roles():
     assert roster.members[0].telegram_username == "writer_a"
     assert {m.gitlab_id for m in roster.chiefs()} == {11, 12}
     assert roster.search_by_name("@WRITER_A")[0].gitlab_id == 10
-    assert not roster.search_by_name("Writer")
+    assert roster.search_by_name("Writer")[0].gitlab_id == 10
+
+
+def test_nickname_lookup_is_exact_and_returns_all_ambiguous_matches():
+    roster = Roster([Member(1, "octopus", "章魚"), Member(2, "writer_b", "章魚"), Member(3, "writer_c", "octopus")])
+    assert [m.gitlab_id for m in roster.search_by_name(" 章魚 ")] == [1, 2]
+    assert [m.gitlab_id for m in roster.search_by_name("OCTOPUS")] == [1, 3]
+    assert [m.gitlab_id for m in roster.search_by_name("@OCTOPUS")] == [1]
+    assert roster.search_by_name("章") == []
+    assert roster.search_by_name("") == []
+    assert roster.search_by_name("@章魚") == []
+
+
+async def test_failed_refresh_invalidates_previously_cached_roster():
+    values = [["Telegram ID", "gitlab_id", "nickname", "default", "note"], ["octopus", "10", "章魚", "yes"]]
+    google = SimpleNamespace(
+        roster_values=AsyncMock(side_effect=[values, RuntimeError("offline"), RuntimeError("offline")])
+    )
+    service = RosterService(google)
+    await service.get()
+    with pytest.raises(RosterUnavailableError, match="offline"):
+        await service.get(force=True)
+    with pytest.raises(RosterUnavailableError, match="offline"):
+        await service.get()
+    assert google.roster_values.await_count == 3
 
 
 def test_conflicting_identity_rejected():

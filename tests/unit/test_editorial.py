@@ -120,7 +120,7 @@ async def test_create_does_not_lookup_or_add_creator(tools, username):
     tools.gl.user_username.side_effect = RemoteError("GitLab", 503)
     await tools.create(args, ctx)
     tools.gl.user_username.assert_not_awaited()
-    tools.members_for_ids.assert_awaited_once_with([2])
+    tools.members_for_ids.assert_awaited_once_with([2], roster=tools.roster.get.return_value)
     payload = tools.workflow.create.call_args.args[0]
     assert "requester" not in payload
     assert payload["assignee_ids"] == [2]

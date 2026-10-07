@@ -31,9 +31,16 @@ class Roster:
         return hits[0] if len(hits) == 1 else None
 
     def search_by_name(self, query: str) -> list[Member]:
-        # API compatibility with the inherited agent; no nickname guessing for assignment.
+        query = query.strip()
         value = query.lstrip("@").casefold()
-        return [m for m in self.members if m.telegram_username and m.telegram_username.casefold() == value]
+        if not value:
+            return []
+        return [
+            m
+            for m in self.members
+            if (m.telegram_username and m.telegram_username.casefold() == value)
+            or (not query.startswith("@") and m.nickname.strip().casefold() == value)
+        ]
 
     def by_gitlab(self, user_id: int) -> Member | None:
         return next((m for m in self.members if m.gitlab_id == user_id), None)
@@ -114,6 +121,9 @@ class RosterService:
                 self._at = time.monotonic()
                 return self._roster
             except Exception as exc:
+                # A failed explicit refresh must not leave an apparently valid old snapshot.
+                self._roster = None
+                self._at = 0.0
                 raise RosterUnavailableError(f"成員表目前無法讀取：{exc}") from exc
 
     async def reload(self) -> Roster:

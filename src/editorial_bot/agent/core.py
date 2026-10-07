@@ -255,7 +255,7 @@ class Agent:
         """把「當前發話者」的名冊身分注入本則訊息，讓「我／幫我／指派給我」可自動解析（RO-5）。
 
         以 telegram_id 精確反查名冊；查到就直接給出 gitlab_id 等平台身分，LLM 不必反問。
-        此注記只放指派所需欄位；名冊完整欄位（含 email／github）在 system prompt 對照表中。
+        此注記只放指派所需欄位；每輪重讀名冊，避免舊身分阻擋使用者更正。
         """
         ident = f"telegram_id={ctx.user_id}"
         if ctx.username:
@@ -263,18 +263,18 @@ class Agent:
         if self._roster is None:
             return f"（本則訊息發話者：{ident}。）"
         try:
-            roster = await self._roster.get()
+            roster = await self._roster.get(force=True)
         except Exception:  # 名冊不可用不應阻斷對話
             return f"（本則訊息發話者：{ident}；名冊暫不可用。）"
 
         me = roster.by_telegram_id(ctx.user_id)
         if me is None and ctx.username:
-            hits = roster.search_by_name(ctx.username)
+            hits = roster.search_by_name("@" + ctx.username)
             me = hits[0] if len(hits) == 1 else None
         if me is None:
             return (
-                f"（本則訊息發話者：{ident}；名冊中查無對應此人。若對方要求「指派給我」等需要本人"
-                "身分的操作，請說明名冊查不到其 telegram 帳號，並請對方提供 GitLab username。）"
+                f"（本則訊息發話者：{ident}；名冊中查無對應此 Telegram 身分。使用者已提供其他人員識別時，"
+                "先用 resolve_member 查證；不能因發話者未列名冊而拒絕操作或要求重複提供已知資訊。）"
             )
 
         parts = [f"暱稱「{me.nickname}」"]

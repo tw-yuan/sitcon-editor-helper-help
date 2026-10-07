@@ -25,7 +25,7 @@ class Empty(Args):
 
 
 class Person(Args):
-    query: str = Field(description="Telegram username，或「我」；不以暱稱猜人。")
+    query: str = Field(min_length=1, description="名冊 nickname、Telegram username（可加 @），或「我」；精確查詢。")
 
 
 class Create(Args):
@@ -193,8 +193,8 @@ class EditorialTools:
             await self.store.checkpoint(key, steps, "uncertain" if exc.uncertain else "error", str(exc))
             raise
 
-    async def members_for_ids(self, ids):
-        roster = await self.roster.get()
+    async def members_for_ids(self, ids, *, roster=None):
+        roster = roster if roster is not None else await self.roster.get(force=True)
         members = [roster.by_gitlab(i) for i in ids]
         if any(m is None for m in members):
             raise ValueError("指定 GitLab ID 不在編輯組名冊，請先用 resolve_member 查證。")
@@ -206,25 +206,27 @@ class EditorialTools:
         return members
 
     async def resolve_member(self, args, ctx):
-        roster = await self.roster.get()
-        if args.query.strip() in ("我", "自己", "me"):
-            member = roster.by_telegram_id(ctx.user_id)
-            matches = [member] if member else roster.search_by_name(ctx.username or "")
-        else:
-            matches = roster.search_by_name(args.query)
-        if len(matches) != 1:
-            raise ValueError("無法唯一對應名冊，請提供 Telegram username。")
         from dataclasses import asdict
 
+        roster = await self.roster.get(force=True)
+        if args.query.strip() in ("我", "自己", "me"):
+            member = roster.by_telegram_id(ctx.user_id)
+            matches = [member] if member else roster.search_by_name("@" + (ctx.username or ""))
+        else:
+            matches = roster.search_by_name(args.query)
+        if not matches:
+            raise ValueError("已重新讀取最新名冊，查無相符的 nickname 或 Telegram 身分；請提供其他識別資訊。")
+        if len(matches) > 1:
+            return {"needs_clarification": True, "matches": [asdict(m) for m in matches]}
         return asdict(matches[0])
 
     async def create(self, args, ctx):
         from ...services.dates import validate_explicit_date
 
         validate_explicit_date(ctx.text, args.due_date, self.settings.tz, reference_time=ctx.reference_time)
-        roster = await self.roster.get()
+        roster = await self.roster.get(force=True)
         ids = args.assignee_ids or [roster.default_member().gitlab_id]
-        await self.members_for_ids(ids)
+        await self.members_for_ids(ids, roster=roster)
         labels = args.labels or [
             self.settings.default_document_label if args.document else self.settings.default_task_label
         ]
@@ -364,7 +366,7 @@ class EditorialTools:
         issues = list({i["iid"]: i for i in issues}.values())
         if any(i["state"] != "opened" for i in issues):
             raise ValueError("包含已關閉卡片，請明確重新開啟後再送審。")
-        roster = await self.roster.get()
+        roster = await self.roster.get(force=True)
         chiefs = roster.chiefs()
         roles = {role for m in chiefs for role in re.split(r"[、,;/\s]+", m.position)}
         if not {"總召", "副召"}.issubset(roles) or any(not mention(m) for m in chiefs):
@@ -427,7 +429,7 @@ class EditorialTools:
         return results
 
     async def tag(self, args, ctx):
-        roster = await self.roster.get()
+        roster = await self.roster.get(force=True)
         members = list(dict.fromkeys(mention(m) for m in roster.members if mention(m)))
         missing = [m.nickname for m in roster.members if not mention(m)]
         for i in range(0, len(members), 30):
@@ -509,7 +511,10 @@ class EditorialTools:
     def build(self):
         return [
             FunctionTool(
-                "resolve_member", "用 Telegram username 或我查詢編輯組名冊身分。", Person, self.resolve_member
+                "resolve_member",
+                "即時重讀 Google Sheets，依 nickname、Telegram username 或我查名冊；唯一相符直接使用，同名回傳候選。",
+                Person,
+                self.resolve_member,
             ),
             FunctionTool(
                 "create_card",

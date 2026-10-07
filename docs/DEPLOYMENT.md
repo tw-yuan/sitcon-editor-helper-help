@@ -28,6 +28,8 @@ Google 帳號須能讀指定名冊、複製範本、在指定 Shared Drive 根�
 
 名冊 `gid=0` 必須包含 `Telegram ID`、`gitlab_id`、`Nickname`、`default`、`note`。`Telegram ID` 填 username；`default=yes` 要唯一；總副召在 `note` 標記「總召／副召」。範本文字需要 `TITTLE`、`DATE`、`GITLAB_LINK`、`DIR_LINK`。
 
+欄名大小寫不拘，`nickname` 可直接查詢負責人，唯一相符不再要求 Telegram username。查人、指派及通知會強制重讀名冊，修正原表後不必等 `CACHE_TTL_ROSTER` 或先 `/reload`；同名才補問候選。重新讀取失敗會回報錯誤並清除舊快取，避免繼續使用舊 ID。
+
 ## 主模型與 Cloudflare AI Gateway
 
 主模型使用以下 `.env` 設定，`LLM_API_KEY` 填入 Cloudflare token：
