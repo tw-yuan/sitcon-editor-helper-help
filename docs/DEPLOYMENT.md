@@ -15,7 +15,7 @@ chmod 600 .env
 
 在 `.env` 填入本專案 Telegram token、管理員數字 ID、GitLab token、主模型與獨立搜尋的憑證及 endpoint。將 Google service account JSON 放到 `secrets/google-sa.json`。
 
-部署時須提供 Google service account、Cloudflare AI Gateway 與獨立搜尋服務的憑證。不要將 `.env` 或 JSON commit。
+部署時須提供 Google service account 與 Anthropic API key（主模型與搜尋可共用同一把）。不要將 `.env` 或 JSON commit。
 
 ```bash
 sudo chown root:10001 secrets/google-sa.json
@@ -30,21 +30,21 @@ Google 帳號須能讀指定名冊、複製範本、在指定 Shared Drive 根�
 
 欄名大小寫不拘，`nickname` 可直接查詢負責人，唯一相符不再要求 Telegram username。查人、指派及通知會強制重讀名冊，修正原表後不必等 `CACHE_TTL_ROSTER` 或先 `/reload`；同名才補問候選。重新讀取失敗會回報錯誤並清除舊快取，避免繼續使用舊 ID。
 
-## 主模型與 Cloudflare AI Gateway
+## 主模型（Anthropic 官方 API）
 
-主模型使用以下 `.env` 設定，`LLM_API_KEY` 填入 Cloudflare token：
+主模型使用以下 `.env` 設定，`LLM_API_KEY` 填入 Anthropic API key：
 
 ```dotenv
-LLM_PROVIDER=openai_compat
-LLM_MODEL=dynamic/sitcon
-LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-5-5
+LLM_BASE_URL=
+LLM_AUTH_BEARER=false
 LLM_THINKING=off
-LLM_SERVICE_TIER=
 ```
 
-SDK 會自動附加 `/chat/completions`，實際請求送至 `https://cf-ai.yuan-tw.net/compat/chat/completions`；不要把完整 endpoint 填進 `LLM_BASE_URL`，也不要額外加 `/v1`。請求中的 `model` 原樣傳送 `dynamic/sitcon`，認證由 SDK 以 `Authorization: Bearer` 傳送；`LLM_AUTH_BEARER` 只影響 Anthropic adapter。主模型使用 Chat Completions；`WEB_SEARCH_*` 則設定獨立的 Anthropic 搜尋服務。
+`LLM_BASE_URL` 留空即送往 `https://api.anthropic.com/v1/messages`，以 `x-api-key` 認證。Sonnet 5.5 不接受 `thinking.type=disabled`，`LLM_THINKING=off` 時 adapter 改送 `between_tools`。`WEB_SEARCH_*` 設定獨立的搜尋子呼叫，目前同樣走官方端點（`WEB_SEARCH_BASE_URL` 留空、`WEB_SEARCH_AUTH_BEARER=false`、`WEB_SEARCH_MODEL=claude-sonnet-5-5`）。`openai_compat` adapter 保留，要切回 OpenAI 相容 gateway 時只需改 `.env`。
 
-沿用現有 adapter 是因為 [Cloudflare 相容端點](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/)支援相同的訊息與工具格式。修改 `.env` 後，先執行下方 AI 檢查，再用 `docker compose up -d bot` 重建容器載入新環境；單純 `docker compose restart` 不會載入新的環境變數。
+修改 `.env` 後，先執行下方 AI 檢查，再用 `docker compose up -d bot` 重建容器載入新環境；單純 `docker compose restart` 不會載入新的環境變數。
 
 ## 建置與檢查
 

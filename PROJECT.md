@@ -42,7 +42,7 @@ SQLite：授權、群組記憶、事件、操作步驟、資源對照、通知�
 | Pydantic Settings／models | 環境變數與工具參數驗證，拒絕額外參數。 |
 | httpx | 固定專案的 GitLab REST API，可測試每一筆請求，不提供任意 API 工具。 |
 | google-api-python-client／google-auth | 直接使用 service account 操作 Sheets、Shared Drive 與 Docs。 |
-| OpenAI／Anthropic SDK | 主模型 `dynamic/sitcon` 經 Cloudflare 的 OpenAI 相容端點；Anthropic 搜尋另有自己的服務與憑證。 |
+| OpenAI／Anthropic SDK | 主模型 `claude-sonnet-5-5` 經 Anthropic 官方 Messages API；網路搜尋另開 Anthropic 子呼叫。OpenAI 相容 adapter 保留供切回 gateway。 |
 | SQLite／aiosqlite | 單機部署的授權、持久記憶、開卡步驟及通知紀錄，免額外維護資料庫服務。 |
 | uv／Docker Compose | 鎖定依賴與部署環境；容器 UID/GID 固定為 10001。 |
 | pytest／respx／Ruff | 模擬遠端錯誤與重試，測試容器無網路、無正式憑證。格式沿用來源專案。 |
@@ -238,11 +238,11 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 沒有公開 HTTP API 端點。CLI 有 `--check-services`（唯讀服務檢查）、`--check-ai`（主模型與公開搜尋檢查）。測試容器使用 Compose `test` profile，無網路也不掛載憑證。
 
-部署與維護步驟見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證與獨立搜尋設定從指定年度 bot 複製到本專案；DeepSeek 主模型自 2026-09-25 改走使用者指定的 Cloudflare AI Gateway。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
+部署與維護步驟見 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)，完整環境變數見 [.env.example](.env.example)。Google 憑證與獨立搜尋設定從指定年度 bot 複製到本專案；主模型 2026-09-25 起曾改走 Cloudflare AI Gateway，2026-10-13 起改用 Anthropic 官方 API。GitLab 與 Telegram 使用本專案專用 token。沒有複製年度 bot 的群組記憶或業務資料。
 
-主模型保留 `LLM_PROVIDER=openai_compat`，以 `LLM_BASE_URL=https://cf-ai.yuan-tw.net/compat`、`LLM_MODEL=dynamic/sitcon` 呼叫 `POST https://cf-ai.yuan-tw.net/compat/chat/completions`。`LLM_API_KEY` 保存 Cloudflare token，SDK 以 Bearer 認證；base URL 不包含 `/chat/completions`，避免 SDK 重複附加路徑。自 2026-09-26 起，請求中的 `model` 改為原樣傳送使用者指定的 `dynamic/sitcon`。
+自 2026-10-13 起主模型為 `LLM_PROVIDER=anthropic`、`LLM_MODEL=claude-sonnet-5-5`，`LLM_BASE_URL` 留空送往官方 `https://api.anthropic.com/v1/messages`，以 `x-api-key` 認證（`LLM_AUTH_BEARER=false`）。網路搜尋子呼叫同樣改走官方端點與 `claude-sonnet-5-5`，與主模型共用同一把 Anthropic API key。`openai_compat` adapter 保留，切回 gateway 只需改 `.env`。
 
-這次沿用 Chat Completions 的訊息、function calling 與工具結果往返，不新增 Responses adapter、依賴或資料表。選擇此方式是因為 gateway 與既有 adapter 相容，能以環境設定完成遷移。網路搜尋仍使用獨立 `WEB_SEARCH_*` 設定，不與主模型共用新憑證。Cloudflare token 與該 gateway 的 `dynamic/sitcon` 路由必須可用；錯誤沿用既有遮蔽憑證的 log 與操作錯誤處理。參考 [Cloudflare 相容端點](https://developers.cloudflare.com/ai-gateway/usage/chat-completion/)。
+Sonnet 5.5 有兩個相容性差異，已在 Anthropic adapter 處理：`thinking.type=disabled` 會回 400，`LLM_THINKING=off` 改送 `between_tools`；回填的 thinking 區塊綁定產生時的對話前綴（system、tools、先前訊息），若前綴已變動導致 400（訊息含 bound to a different conversation），會拿掉歷史中的 thinking 區塊重送一次。
 
 直接使用 service account 存取 Shared Drive，不使用網域委派。GitLab 帳號須在固定專案有 Developer 權限並能讀 Wiki；Google 帳號須能讀名冊、複製範本及在根目錄建立內容。
 
@@ -279,6 +279,13 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 - 既有 Docker 測試服務的 16 項 LLM adapter 測試通過。
 - 首次真實主模型請求回傳 HTTP 400：上游回報收到不受支援的 `deepseek-v4.1-flash`，當時未重新載入正式服務。依使用者要求重試後，`dynamic/sitcon` 已成功回覆 `OK`，`stop_reason=stop`。
 - 已執行 `docker compose up -d --no-deps bot` 重建正式容器，確認容器內 `LLM_MODEL=dynamic/sitcon`。啟動 log 顯示 `Editorial bot ready`、`Application started`，容器為 running，restart count 為 0。
+
+## Anthropic 官方 API 切換驗證（2026-10-13）
+
+- 主模型與網路搜尋改用 Anthropic 官方 API，模型皆為 `claude-sonnet-5-5`；`.env` 改了 provider、model、API key、base URL（留空）與 Bearer 開關，搜尋同步改 key、model、base URL。舊 `.env` 備份於 `secrets/`（不進 Git）。
+- Anthropic adapter 補上 Sonnet 5.5 相容：`LLM_THINKING=off` 改送 `between_tools`；thinking 前綴綁定被拒時拿掉歷史 thinking 重送一次。新增 3 項 adapter 測試，隔離測試映像 328 項全過，Ruff check 與 format check 通過。
+- 透過 Compose 執行 `--check-ai`：主模型回覆成功，搜尋 1 次、5 筆來源、無工具錯誤。
+- 已執行 `docker compose up -d bot` 重建正式容器，容器內 `LLM_PROVIDER=anthropic`、`LLM_MODEL=claude-sonnet-5-5`；log 顯示 `Editorial bot ready`、`Application started`，restart count 0。
 
 ## 本次交付驗證
 
