@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     llm_service_tier: str = ""
     llm_thinking: Literal["off", "low", "medium", "high", "xhigh", "max"] = "off"
     llm_web_search: bool = False
+    llm_refusal_fallback: bool = True
     llm_max_tool_iterations: int = Field(12, ge=1, le=32)
     web_search_api_key: SecretStr = SecretStr("")
     web_search_model: str = ""
@@ -37,6 +38,7 @@ class Settings(BaseSettings):
     web_search_max_content_tokens: int = Field(40000, ge=1000)
     web_search_country: str = "TW"
     web_search_timeout: float = Field(180, gt=0)
+    web_search_refusal_fallback: bool = True
     db_path: str = "data/editorial.sqlite3"
     migrations_path: str = "migrations"
     tz: str = "Asia/Taipei"

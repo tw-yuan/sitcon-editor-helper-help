@@ -244,6 +244,8 @@ audit_log 保存群組、操作者、action、status 與工具名稱；operation
 
 Sonnet 5.5 有兩個相容性差異，已在 Anthropic adapter 處理：`thinking.type=disabled` 會回 400，`LLM_THINKING=off` 改送 `between_tools`；回填的 thinking 區塊綁定產生時的對話前綴（system、tools、先前訊息），若前綴已變動導致 400（訊息含 bound to a different conversation），會拿掉歷史中的 thinking 區塊重送一次。
 
+同日起 `LLM_THINKING=medium`（adaptive thinking＋effort medium），並開啟伺服器端拒答 fallback（`fallbacks: "default"`，beta `server-side-fallback-2026-07-01`；`LLM_REFUSAL_FALLBACK`、`WEB_SEARCH_REFUSAL_FALLBACK` 可關）。Sonnet 5.5 的 `cyber`／`frontier_llm` 拒答改由 Sonnet 5 重跑；中途接手時只回填邊界前的 text，被中斷的 thinking／tool_use 不回填也不執行；仍被拒答時回固定說明並丟棄半截輸出。
+
 直接使用 service account 存取 Shared Drive，不使用網域委派。GitLab 帳號須在固定專案有 Developer 權限並能讀 Wiki；Google 帳號須能讀名冊、複製範本及在根目錄建立內容。
 
 `.env` 權限為 600；JSON 由 root 與容器群組 10001 讀取，權限 640；憑證、資料庫、原始 n8n 檔不進映像。Log 對設定的 token／API key 遮蔽，httpx 不開 INFO URL 紀錄。
@@ -286,6 +288,7 @@ Sonnet 5.5 有兩個相容性差異，已在 Anthropic adapter 處理：`thinkin
 - Anthropic adapter 補上 Sonnet 5.5 相容：`LLM_THINKING=off` 改送 `between_tools`；thinking 前綴綁定被拒時拿掉歷史 thinking 重送一次。新增 3 項 adapter 測試，隔離測試映像 328 項全過，Ruff check 與 format check 通過。
 - 透過 Compose 執行 `--check-ai`：主模型回覆成功，搜尋 1 次、5 筆來源、無工具錯誤。
 - 已執行 `docker compose up -d bot` 重建正式容器，容器內 `LLM_PROVIDER=anthropic`、`LLM_MODEL=claude-sonnet-5-5`；log 顯示 `Editorial bot ready`、`Application started`，restart count 0。
+- 同日追加 effort `medium` 與拒答 fallback：新增 6 項測試（fallback 參數、中途接手回填、拒答說明、搜尋拒答），隔離測試映像 334 項全過，Ruff check 與 format check 通過；`--check-ai` 帶 fallback 參數時主模型與搜尋（3 筆來源）皆成功；重建正式容器後 `LLM_THINKING=medium`、`LLM_REFUSAL_FALLBACK=true`，`Editorial bot ready`、`Application started`，restart count 0。實際觸發拒答的情境未實測。
 
 ## 本次交付驗證
 

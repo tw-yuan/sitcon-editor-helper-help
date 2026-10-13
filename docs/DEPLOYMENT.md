@@ -39,10 +39,11 @@ LLM_PROVIDER=anthropic
 LLM_MODEL=claude-sonnet-5-5
 LLM_BASE_URL=
 LLM_AUTH_BEARER=false
-LLM_THINKING=off
+LLM_THINKING=medium
+LLM_REFUSAL_FALLBACK=true
 ```
 
-`LLM_BASE_URL` 留空即送往 `https://api.anthropic.com/v1/messages`，以 `x-api-key` 認證。Sonnet 5.5 不接受 `thinking.type=disabled`，`LLM_THINKING=off` 時 adapter 改送 `between_tools`。`WEB_SEARCH_*` 設定獨立的搜尋子呼叫，目前同樣走官方端點（`WEB_SEARCH_BASE_URL` 留空、`WEB_SEARCH_AUTH_BEARER=false`、`WEB_SEARCH_MODEL=claude-sonnet-5-5`）。`openai_compat` adapter 保留，要切回 OpenAI 相容 gateway 時只需改 `.env`。
+`LLM_BASE_URL` 留空即送往 `https://api.anthropic.com/v1/messages`，以 `x-api-key` 認證。`LLM_THINKING` 對映 adaptive thinking 的 effort（目前 `medium`）；Sonnet 5.5 不接受 `thinking.type=disabled`，設 `off` 時 adapter 改送 `between_tools`。`LLM_REFUSAL_FALLBACK=true`（搜尋為 `WEB_SEARCH_REFUSAL_FALLBACK`）會在請求帶 `fallbacks: "default"`：安全分類器拒答時，`cyber`／`frontier_llm` 類別由伺服器改用 Sonnet 5 重跑；其他類別仍拒答時，bot 回固定說明。此 beta 僅官方 API 支援，改走 gateway 時要設 `false`。`WEB_SEARCH_*` 設定獨立的搜尋子呼叫，目前同樣走官方端點（`WEB_SEARCH_BASE_URL` 留空、`WEB_SEARCH_AUTH_BEARER=false`、`WEB_SEARCH_MODEL=claude-sonnet-5-5`）。`openai_compat` adapter 保留，要切回 OpenAI 相容 gateway 時只需改 `.env`。
 
 修改 `.env` 後，先執行下方 AI 檢查，再用 `docker compose up -d bot` 重建容器載入新環境；單純 `docker compose restart` 不會載入新的環境變數。
 
