@@ -455,3 +455,103 @@ async def test_add_document_rejects_mismatched_resume_operation(existing_card):
         await workflow.add_document(2, ctx, resume_id="b" * 24)
     gitlab.get.assert_not_awaited()
     google.preflight.assert_not_awaited()
+
+
+@pytest.fixture
+def standalone(setup):
+    """Folder/document without a card: Drive only, any GitLab call is a failure."""
+    workflow, google, gitlab, store, ctx, _payload = setup
+    for method in vars(gitlab).values():
+        method.side_effect = AssertionError("不開卡時不得存取 GitLab")
+    google.metadata = AsyncMock(
+        return_value={"id": "folder", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]}
+    )
+    return workflow, google, gitlab, store, ctx, {"title": "測試", "due_date": "2026-10-15"}
+
+
+async def test_standalone_folder_creates_only_drive_folder_and_dedupes_per_event(standalone):
+    workflow, google, gitlab, store, ctx, payload = standalone
+    result = await workflow.create_folder(payload, ctx)
+    assert result["folder_id"] == "folder" and result["folder_url"].endswith("/folder")
+    assert result["document_url"] is None and "iid" not in result and "issue_url" not in result
+    assert "卡片" in result["note"]
+    google.create_folder.assert_awaited_once_with("1015_測試", result["operation_id"])
+    google.copy_template.assert_not_awaited()
+    for method in vars(gitlab).values():
+        method.assert_not_awaited()
+    assert (await store.one("SELECT kind,state FROM operations"))["kind"] == "create_folder"
+    # Same Telegram event: receipt only. A new event is a new request and builds another folder.
+    assert await workflow.create_folder(payload, ctx) == result
+    google.create_folder.assert_awaited_once()
+    ctx.event_id = "event2"
+    again = await workflow.create_folder(payload, ctx)
+    assert again["operation_id"] != result["operation_id"]
+    assert google.create_folder.await_count == 2
+
+
+async def test_standalone_document_in_root_blanks_card_link_and_reports_root(standalone):
+    workflow, google, gitlab, store, ctx, payload = standalone
+    result = await workflow.create_document(payload, ctx)
+    assert result["document_url"].endswith("/doc/edit") and result["folder_url"] is None
+    assert "根目錄" in result["note"]
+    google.metadata.assert_not_awaited()
+    google.copy_template.assert_awaited_once_with("root", "1015_測試", result["operation_id"])
+    google.fill_document.assert_awaited_once_with("doc", "root", "測試", "2026-10-15", None)
+    for method in vars(gitlab).values():
+        method.assert_not_awaited()
+    assert (await store.one("SELECT kind FROM operations"))["kind"] == "create_document"
+    assert await store.one("SELECT 1 FROM resources") is None
+
+
+async def test_standalone_document_goes_into_folder_built_in_the_same_turn(standalone):
+    workflow, google, _gitlab, _store, ctx, payload = standalone
+    folder = await workflow.create_folder(payload, ctx)
+    result = await workflow.create_document({**payload, "folder_id": folder["folder_id"]}, ctx)
+    assert result["folder_url"] == folder["folder_url"] and result["document_url"].endswith("/doc/edit")
+    assert "根目錄" not in result["note"]
+    google.metadata.assert_awaited_once_with("folder")
+    google.copy_template.assert_awaited_once_with("folder", "1015_測試", result["operation_id"])
+    google.fill_document.assert_awaited_once_with("doc", "folder", "測試", "2026-10-15", None)
+    assert result["operation_id"] != folder["operation_id"]
+
+
+@pytest.mark.parametrize("problem", ["not_a_folder", "outside_root"])
+async def test_standalone_document_rejects_folder_id_that_is_not_under_root(standalone, problem):
+    workflow, google, _gitlab, store, ctx, payload = standalone
+    if problem == "not_a_folder":
+        google.metadata.return_value["mimeType"] = "application/vnd.google-apps.document"
+    else:
+        google.metadata.return_value["parents"] = ["other-root"]
+    with pytest.raises(ValueError, match="核准根目錄"):
+        await workflow.create_document({**payload, "folder_id": "folder"}, ctx)
+    google.copy_template.assert_not_awaited()
+    google.fill_document.assert_not_awaited()
+    assert (await store.one("SELECT state FROM operations"))["state"] == "error"
+
+
+async def test_standalone_document_resume_fills_without_second_copy(standalone):
+    workflow, google, _gitlab, store, ctx, payload = standalone
+    google.fill_document.side_effect = RemoteError("Google", 503, uncertain=True)
+    with pytest.raises(ValueError, match="操作"):
+        await workflow.create_document(payload, ctx)
+    op = await store.one("SELECT * FROM operations WHERE kind='create_document'")
+    google.fill_document.side_effect = None
+    ctx.event_id = "resume"
+    result = await workflow.create_document(payload, ctx, resume_id=op["id"])
+    assert result["operation_id"] == op["id"] and result["document_url"].endswith("/doc/edit")
+    google.copy_template.assert_awaited_once()
+    assert google.fill_document.await_count == 2
+    assert await workflow.create_document(payload, ctx, resume_id=op["id"]) == result
+
+
+async def test_standalone_operation_cannot_be_resumed_by_other_owner(standalone):
+    workflow, google, _gitlab, store, ctx, payload = standalone
+    google.create_folder.side_effect = RemoteError("Google", 403)
+    with pytest.raises(ValueError):
+        await workflow.create_folder(payload, ctx)
+    key = (await store.one("SELECT id FROM operations"))["id"]
+    google.create_folder.side_effect = None
+    ctx.user_id += 1
+    with pytest.raises(ValueError, match="只能接續自己"):
+        await workflow.create_folder(payload, ctx, resume_id=key)
+    google.create_folder.assert_awaited_once()

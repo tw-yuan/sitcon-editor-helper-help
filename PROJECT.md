@@ -99,7 +99,7 @@ Agent 續接時，除原始使用者訊息，也依原 `ask_user` 呼叫 ID 取�
 
 ## 開卡資料流
 
-自 2026-11-02 起開卡拆成三個獨立工具：`create_card` 只建 GitLab Issue，`create_card_folder(iid)` 建資料夾、`create_card_document(iid)` 建範本文案，後兩者各自把連結追加到卡片說明並更新 `resources` 對照。預設三個都做由系統提示與工具描述引導模型決定：一般「開卡」依序呼叫三者；「僅開卡／只開卡／不要文件」只呼叫 `create_card`（`document_card=false` 改用任務 label）；「要資料夾不要文案」等指定範圍照指定呼叫；既有卡片可隨時補建其中一項。只建文案不建資料夾時，文案放在 Drive 根目錄並在回報說明。不因標題、圖片或 label 自行略過資料夾／文案；各工具仍使用 Sheets 名冊查核負責人。下列步驟描述三者合起來的結果。
+自 2026-11-02 起開卡拆成三個獨立工具：`create_card` 只建 GitLab Issue，`create_card_folder` 建資料夾、`create_card_document` 建範本文案。後兩者的 `iid` 可選：有 `iid` 時用該卡的標題與到期日，各自把連結追加到卡片說明並更新 `resources` 對照；沒有 `iid` 時改收 `title` 與 `due_date`（日期驗證同 `create_card`），在核准根目錄建立 `MMDD_TITLE` 資料夾或複製範本文案，完全不碰 GitLab，也不寫 `resources`。不開卡的文案可帶 `folder_id` 放進同一輪剛建好的資料夾，工具層先查 Drive 確認它是資料夾且直接位於核准根目錄下，否則拒絕；省略則放根目錄。有 `iid` 又帶 `folder_id` 會在參數驗證被拒絕，因為有卡片時文案一律放該卡的資料夾。沒有卡片時範本的 `GITLAB_LINK` 填為空字串，不留佔位字；`DIR_LINK` 填實際父資料夾。預設三個都做由系統提示與工具描述引導模型決定：一般「開卡」依序呼叫三者；「僅開卡／只開卡／不要文件」只呼叫 `create_card`（`document_card=false` 改用任務 label）；「開卡，要資料夾不要文案」等指定範圍照指定呼叫；使用者沒說開卡、只說「只要資料夾」「只要文案」「只要資料夾跟文案」時完全不呼叫 `create_card`，資料夾與文案都要時先建資料夾再把 `folder_id` 傳給文案；既有卡片可隨時補建其中一項。只建文案不建資料夾時，文案放在 Drive 根目錄並在回報說明。系統提示另要求回覆使用者時不提工具名稱、`iid`、參數等內部名詞，只用「卡片／資料夾／文案」與「#卡號」，部分完成時仍附操作 ID。不因標題、圖片或 label 自行略過資料夾／文案；各工具仍使用 Sheets 名冊查核負責人。下列步驟描述三者合起來的結果。
 
 1. 使用者提供標題與到期日。支援獨立四位數 MMDD；「小石開卡 0925 test」直接解析為當年 09/25 到期、標題 test，無需補問。MMDD 使用真實日曆驗證，卡號及較長識別碼不當作日期。缺年份用台灣當前年份；「今天／今日、明天／明日、後天（也接受后天）」依本輪台灣日期加 0、1、2 日直接換算，跨月、跨年及閏年依日曆處理，不另問同意。「下週某天、過幾天」等無法唯一確定日期才補問。日期必須來自使用者的指令／續接脈絡，不接受模型編造的日期。
 2. 將指定 nickname 或 Telegram username 精確對應最新名冊的 GitLab ID，或查證使用者明確提供的 GitLab ID；同名列候選補問，未指定時採唯一 `default=yes`，回覆明示。
@@ -132,7 +132,7 @@ Agent 續接時，除原始使用者訊息，也依原 `ask_user` 呼叫 ID 取�
 5. 重新讀取原卡，在最新說明後追加缺少的資源連結，保留原說明、建立者、標籤、負責人與到期日；若期間已連結其他資源則停止並回報本次已建資源。GitLab 更新沿用既有回讀驗證。
 6. 更新資源對照及完成收據。GitLab 回應遺失後，重試先讀取連結；已附上的連結不重複寫入。
 
-補建的操作種類為 `add_card_document`，操作 ID 依固定專案內的卡號穩定產生，同一張卡跨 Telegram 請求與同時請求共用一組資源。未完成操作限原操作者在原群接續；完成操作回傳既有收據。`resume_operation` 可接續開卡與補建，服務重啟的恢復摘要也包含已完成補建的連結。沿用既有 operations／resources／outbox，無新依賴、環境變數或 migration。
+補建的操作種類為 `add_card_folder`／`add_card_document`，操作 ID 依固定專案內的卡號穩定產生，同一張卡跨 Telegram 請求與同時請求共用一組資源。不開卡的操作種類為 `create_folder`／`create_document`，操作 ID 比照 `create_card` 以 Telegram 事件 ID 加上 payload 產生：同一事件重送回傳既有收據，不同請求各自建立新資源。這五種 kind 集中定義在 `workflow.RESOURCE_OPERATIONS`，`resume_operation` 與 gateway 的重啟恢復摘要共用。未完成操作限原操作者在原群接續；完成操作回傳既有收據。服務重啟的恢復摘要也包含已完成補建與不開卡資源的連結。沿用既有 operations／resources／outbox，無新依賴、環境變數或 migration。
 
 補建不會把已存在的文案重新套版，不移動已有文件，也不自動回填所有歷史卡片。已完成補建的收據用於去重；若之後有人刪除或搬走資源，需人工查核，不因再次要求補建而自動建立第二份。
 
@@ -208,9 +208,9 @@ Agent 文字原本即以 `parse_mode=None` 發送；補問選項改用「選項 
 | --- | --- |
 | resolve_member | 即時重讀名冊，以 nickname／Telegram username 精確查人、解析「我」；同名回傳候選，直接提供 GitLab ID 時查證帳號。 |
 | create_card | 只建立 GitLab 卡片並回傳卡號；`document_card` 只決定預設分類 label。 |
-| create_card_folder | 依卡號建立 `MMDD_TITLE` Drive 資料夾並把連結寫回卡片；已有則回傳既有連結。 |
-| create_card_document | 依卡號複製範本文案到卡片資料夾（沒有資料夾則放根目錄並說明）、填入連結並寫回卡片；已有則回傳既有連結。 |
-| resume_operation | 接續部分完成的開卡／補建資料夾／補建文案操作。 |
+| create_card_folder | 建立 `MMDD_TITLE` Drive 資料夾。給卡號就用該卡標題與到期日並把連結寫回卡片（已有則回傳既有連結）；不給卡號改收標題與到期日，只建資料夾、不碰 GitLab。 |
+| create_card_document | 複製範本文案並填入連結。給卡號就放進該卡資料夾（沒有則放根目錄並說明）並寫回卡片，已有則回傳既有連結；不給卡號改收標題與到期日，可用 `folder_id` 放進核准根目錄下的指定資料夾，否則放根目錄，不碰 GitLab。 |
+| resume_operation | 接續部分完成的開卡、補建資料夾／文案，或不開卡的資料夾／文案操作。 |
 | gitlab_get_issue | 卡片、關聯卡及選讀留言。 |
 | gitlab_search_issues | 標題、label、負責人、狀態、日期篩選，預設 opened 含 Review。 |
 | gitlab_update_issue | 標題、description、到期日、負責人、既有 label、狀態。 |

@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from editorial_bot.gateway import Gateway
+from editorial_bot.services.workflow import RESOURCE_OPERATIONS
 from editorial_bot.storage.db import Store
 
 
@@ -44,7 +45,7 @@ async def test_crashed_review_recovers_notification_in_original_topic(tmp_path):
     await store.close()
 
 
-@pytest.mark.parametrize("kind", ["create_card", "add_card_folder", "add_card_document"])
+@pytest.mark.parametrize("kind", sorted(RESOURCE_OPERATIONS))
 async def test_crashed_resource_workflow_recovers_completed_links(tmp_path, kind):
     store = await Store.open(str(tmp_path / "db.sqlite3"))
     try:

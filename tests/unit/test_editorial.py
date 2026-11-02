@@ -224,7 +224,7 @@ async def test_create_card_type_only_selects_default_label(tools, document_card)
 @pytest.mark.parametrize(
     "name,method", [("create_card_folder", "add_folder"), ("create_card_document", "add_document")]
 )
-async def test_resource_tools_accept_only_existing_card_number(tools, name, method):
+async def test_resource_tools_with_card_number_use_card_and_reject_folder_id(tools, name, method):
     from pydantic import ValidationError
 
     tools.workflow = SimpleNamespace(**{method: AsyncMock(return_value={"iid": 682})})
@@ -238,17 +238,27 @@ async def test_resource_tools_accept_only_existing_card_number(tools, name, meth
         tool.args_model(iid=682, folder_id="arbitrary")
 
 
-@pytest.mark.parametrize("kind,method", [("add_card_document", "add_document"), ("add_card_folder", "add_folder")])
+@pytest.mark.parametrize(
+    "kind,method,payload",
+    [
+        ("add_card_document", "add_document", {"iid": 682}),
+        ("add_card_folder", "add_folder", {"iid": 682}),
+        ("create_folder", "create_folder", {"title": "test", "due_date": "2026-10-05"}),
+        ("create_document", "create_document", {"title": "test", "due_date": "2026-10-05", "folder_id": None}),
+    ],
+)
 @pytest.mark.parametrize("owner", ["same", "other_user", "other_chat"])
-async def test_resume_resource_dispatches_only_original_owner_operation(tools, owner, kind, method):
+async def test_resume_resource_dispatches_only_original_owner_operation(tools, owner, kind, method, payload):
     from editorial_bot.agent.tools.editorial import Resume
 
     ctx = context()
     key = "a" * 24
-    await tools.store.operation(key, "first", ctx.chat_id, ctx.user_id, kind, {"iid": 682})
+    await tools.store.operation(key, "first", ctx.chat_id, ctx.user_id, kind, payload)
     tools.workflow = SimpleNamespace(
         add_document=AsyncMock(return_value={"iid": 682}),
         add_folder=AsyncMock(return_value={"iid": 682}),
+        create_folder=AsyncMock(return_value={"folder_id": "folder"}),
+        create_document=AsyncMock(return_value={"folder_id": None}),
         create=AsyncMock(),
     )
     if owner == "other_user":
@@ -257,7 +267,7 @@ async def test_resume_resource_dispatches_only_original_owner_operation(tools, o
         ctx.chat_id -= 1
     if owner == "same":
         await tools.resume(Resume(operation_id=key), ctx)
-        getattr(tools.workflow, method).assert_awaited_once_with(682, ctx, resume_id=key)
+        getattr(tools.workflow, method).assert_awaited_once_with(payload.get("iid", payload), ctx, resume_id=key)
     else:
         with pytest.raises(ValueError, match="找不到"):
             await tools.resume(Resume(operation_id=key), ctx)
@@ -343,3 +353,29 @@ async def test_partial_review_failure_does_not_allow_empty_reply(tools):
     assert len(ctx.notices) == 1
     assert "error" in results[1]
     assert not ctx.review_completed
+
+
+@pytest.mark.parametrize(
+    "name,method,extra",
+    [("create_card_folder", "create_folder", {}), ("create_card_document", "create_document", {"folder_id": "folder"})],
+)
+async def test_resource_tools_without_card_send_title_and_date_to_standalone_workflow(tools, name, method, extra):
+    from zoneinfo import ZoneInfo
+
+    from pydantic import ValidationError
+
+    tools.workflow = SimpleNamespace(**{method: AsyncMock(return_value={"folder_id": "folder"})})
+    tool = next(t for t in tools.build() if t.name == name)
+    due = f"{datetime.now(ZoneInfo('Asia/Taipei')).year}-09-25"
+    ctx = ToolContext(-1, 3, 7, "author_one", "小石，只要資料夾跟文案 0925 test，不開卡", event_id="standalone")
+    await tool.run(tool.args_model(title="test", due_date=due, **extra), ctx)
+    expected = {"title": "test", "due_date": due, **({"folder_id": extra.get("folder_id")} if extra else {})}
+    getattr(tools.workflow, method).assert_awaited_once_with(expected, ctx)
+    # The date must come from the user's own words, exactly as for create_card.
+    ctx.text = "小石，只要資料夾 test"
+    with pytest.raises(ValueError, match="到期日"):
+        await tool.run(tool.args_model(title="test", due_date=due), ctx)
+    getattr(tools.workflow, method).assert_awaited_once()
+    for bad in ({}, {"title": "test"}, {"due_date": due}, {"title": "test", "due_date": "09/25"}):
+        with pytest.raises(ValidationError):
+            tool.args_model(**bad)

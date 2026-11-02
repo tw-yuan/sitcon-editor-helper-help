@@ -16,6 +16,7 @@ from .agent.tools.editorial import Empty
 from .feedback import REACT_DONE, progress, set_reaction
 from .logging_setup import redact
 from .questions import Questions
+from .services.workflow import RESOURCE_OPERATIONS
 
 log = logging.getLogger(__name__)
 HELP = """我是編輯組小石。請以 @我的帳號、「小石」或 review 開頭，或回覆我的訊息。
@@ -259,7 +260,7 @@ class Gateway:
             summary = "前次處理途中重新啟動，請查核以下紀錄後接續，避免重複操作。\n"
             for op in ops:
                 summary += f"{op['id']}：{op['kind']}／{op['state']}\n"
-                if op["kind"] in {"create_card", "add_card_folder", "add_card_document"} and op["state"] == "done":
+                if op["kind"] in RESOURCE_OPERATIONS and op["state"] == "done":
                     result = json.loads(op["result"])
                     summary += (
                         "\n".join(result[k] for k in ("issue_url", "folder_url", "document_url") if result.get(k))

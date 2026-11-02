@@ -145,19 +145,23 @@ class Google:
             write=True,
         )
 
-    async def fill_document(self, document_id: str, folder_id: str, title: str, due_date: str, issue_url: str) -> None:
+    async def fill_document(
+        self, document_id: str, folder_id: str, title: str, due_date: str, issue_url: str | None
+    ) -> None:
         metadata = await self.metadata(document_id)
         if folder_id not in metadata.get("parents", []):
             raise ValueError("文件與本次資料夾不相符")
         folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
         if not self._in_root(folder_id, await self.metadata(folder_id)):
             raise ValueError("文案資料夾已移出核准根目錄，停止寫入。")
+        # Without a card, GITLAB_LINK is blanked rather than left as a placeholder.
+        urls = [u for u in (issue_url, folder_url) if u]
         doc = await self.execute(self.docs.documents().get(documentId=document_id, includeTabsContent=True))
         text = document_text(doc)
-        if issue_url not in text or folder_url not in text:
+        if any(u not in text for u in urls):
             # Replace title last so a title containing DATE is not interpreted as a template token.
             values = {
-                "GITLAB_LINK": issue_url,
+                "GITLAB_LINK": issue_url or "",
                 "DATE": due_date.replace("-", "/"),
                 "DIR_LINK": folder_url,
                 "TITTLE": title,
@@ -171,9 +175,9 @@ class Google:
             )
             doc = await self.execute(self.docs.documents().get(documentId=document_id, includeTabsContent=True))
             text = document_text(doc)
-            if issue_url not in text or folder_url not in text:
+            if any(u not in text for u in urls):
                 raise ValueError("文案範本缺少 GITLAB_LINK／DIR_LINK，連結尚未完整填入。")
-        styles = link_styles(doc, [issue_url, folder_url])
+        styles = link_styles(doc, urls)
         if styles:
             await self.execute(
                 self.docs.documents().batchUpdate(documentId=document_id, body={"requests": styles}), write=True

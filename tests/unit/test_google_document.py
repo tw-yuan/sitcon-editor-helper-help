@@ -34,3 +34,19 @@ async def test_root_folder_is_accepted_as_document_parent_fallback():
     assert google.drive.files().copy.call_args.kwargs["body"]["parents"] == ["root"]
     with pytest.raises(ValueError, match="核准根目錄"):
         await google.copy_template("other", "1015_測試", "op")
+
+
+async def test_document_without_card_blanks_gitlab_link_and_styles_only_folder_url():
+    google = Google.__new__(Google)
+    google.settings = SimpleNamespace(drive_root_folder_id="root")
+    google.docs = MagicMock()
+    google.metadata = AsyncMock(side_effect=[{"parents": ["root"]}, {"id": "root", "parents": []}])
+    folder = "https://drive.google.com/drive/folders/root"
+    original = {"body": {"textRun": {"content": "TITTLE DATE GITLAB_LINK DIR_LINK"}}}
+    filled = {"body": {"startIndex": 1, "textRun": {"content": f"測試 2026/10/15  {folder}"}}}
+    google.execute = AsyncMock(side_effect=[original, {}, filled, {}])
+    await google.fill_document("doc", "root", "測試", "2026-10-15", None)
+    replace, style = [c.kwargs["body"]["requests"] for c in google.docs.documents().batchUpdate.call_args_list]
+    values = {r["replaceAllText"]["containsText"]["text"]: r["replaceAllText"]["replaceText"] for r in replace}
+    assert values["GITLAB_LINK"] == "" and values["DIR_LINK"] == folder
+    assert [s["updateTextStyle"]["textStyle"]["link"]["url"] for s in style] == [folder]

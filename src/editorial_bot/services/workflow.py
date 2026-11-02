@@ -10,6 +10,11 @@ from functools import partial
 from .gitlab import RemoteError
 from .google import folder_name
 
+# Operation kinds whose receipts carry issue/folder/document links (resume and crash-recovery summaries).
+RESOURCE_OPERATIONS = frozenset(
+    {"create_card", "add_card_folder", "add_card_document", "create_folder", "create_document"}
+)
+
 
 def operation_key(event: str, kind: str, payload: dict) -> str:
     raw = json.dumps([event, kind, payload], ensure_ascii=False, sort_keys=True)
@@ -171,6 +176,96 @@ class CardWorkflow:
             raise ValueError("卡片有多個或互相衝突的資料夾／文案連結，請先查核，避免覆蓋既有資源。")
         return next(iter(folders), None), next(iter(documents), None)
 
+    async def _approved_folder(self, folder_id: str) -> None:
+        # folder_id may come from the model: it must be a folder directly under the approved root.
+        folder = await self.google.metadata(folder_id)
+        root = self.settings.drive_root_folder_id
+        if folder.get("mimeType") != "application/vnd.google-apps.folder" or root not in folder.get("parents", []):
+            raise ValueError("指定的資料夾不在核准根目錄下，停止建立。")
+
+    async def _make_resource(self, kind, key, steps, name, parent, title, due_date, issue_url) -> dict:
+        """Find-or-create one Drive resource under `parent`; documents are also filled in."""
+        step = partial(self._step, key, steps)
+        if kind == "folder":
+            return await step(
+                "folder",
+                lambda: self.google.find_resource(parent, key, "folder"),
+                lambda: self.google.create_folder(name, key),
+            )
+        created = await step(
+            "document",
+            lambda: self.google.find_resource(parent, key, "document"),
+            lambda: self.google.copy_template(parent, name, key),
+        )
+        if not steps.get("document_filled"):
+            await self.google.fill_document(created["id"], parent, title, due_date, issue_url)
+            steps["document_filled"] = True
+            await self.store.checkpoint(key, steps)
+        return created
+
+    async def create_folder(self, payload: dict, ctx, *, resume_id: str | None = None) -> dict:
+        return await self._create_resource("folder", payload, ctx, resume_id=resume_id)
+
+    async def create_document(self, payload: dict, ctx, *, resume_id: str | None = None) -> dict:
+        return await self._create_resource("document", payload, ctx, resume_id=resume_id)
+
+    async def _create_resource(self, kind: str, payload: dict, ctx, *, resume_id: str | None) -> dict:
+        """Create a standalone Drive folder or template document without touching GitLab."""
+        root = self.settings.drive_root_folder_id
+        payload = {
+            "title": payload["title"].strip(),
+            "due_date": payload["due_date"],
+            **({"folder_id": payload.get("folder_id") or None} if kind == "document" else {}),
+        }
+        date.fromisoformat(payload["due_date"])
+        if not payload["title"]:
+            raise ValueError("標題不可空白")
+        key = resume_id or operation_key(ctx.event_id, f"create_{kind}", payload)
+        async with self.locks.setdefault(key, asyncio.Lock()):
+            op = await self.store.operation(key, ctx.event_id, ctx.chat_id, ctx.user_id, f"create_{kind}", payload)
+            if op["chat_id"] != ctx.chat_id or op["user_id"] != ctx.user_id:
+                raise ValueError("只能接續自己在本群的操作。")
+            if op["state"] == "done":
+                return json.loads(op["result"])
+            steps = op["steps"]
+            try:
+                await self.google.preflight(kind == "document")
+                parent = payload.get("folder_id") or root
+                if payload.get("folder_id"):
+                    await self._approved_folder(parent)
+                name = folder_name(payload["title"], payload["due_date"])
+                created = await self._make_resource(
+                    kind, key, steps, name, parent, payload["title"], payload["due_date"], None
+                )
+                folder_value = created["id"] if kind == "folder" else payload.get("folder_id")
+                doc_value = created["id"] if kind == "document" else None
+                result = {
+                    "operation_id": key,
+                    "title": payload["title"],
+                    "due_date": payload["due_date"],
+                    "name": name,
+                    "folder_url": f"https://drive.google.com/drive/folders/{folder_value}" if folder_value else None,
+                    "document_url": f"https://docs.google.com/document/d/{doc_value}/edit" if doc_value else None,
+                    "folder_id": folder_value,
+                    "note": "未建立 GitLab 卡片，資源沒有連結到任何卡片。",
+                }
+                if kind == "document" and not folder_value:
+                    result["note"] += "文案放在 Drive 根目錄下。"
+                await self.store.finish(key, result)
+                return result
+            except Exception as exc:
+                await self.store.checkpoint(key, steps, "uncertain" if steps.get("pending") else "error", str(exc))
+                links = {}
+                if steps.get("folder"):
+                    links["folder"] = f"https://drive.google.com/drive/folders/{steps['folder']['id']}"
+                if steps.get("document"):
+                    links["document"] = f"https://docs.google.com/document/d/{steps['document']['id']}/edit"
+                completed = [k for k in ("folder", "document", "document_filled") if k in steps]
+                raise ValueError(
+                    f"建立尚未完成。操作 {key}；已完成：{', '.join(completed) or '無'}。"
+                    f"{exc}。已知連結：{json.dumps(links, ensure_ascii=False)}。可要求接續此操作。"
+                ) from exc
+
     async def add_folder(self, iid: int, ctx, *, resume_id: str | None = None) -> dict:
         return await self._add_resource(iid, ctx, "folder", resume_id=resume_id)
 
@@ -231,7 +326,6 @@ class CardWorkflow:
                     raise ValueError(f"此卡的資料夾操作 {folder_op['id']} 尚未完成，請先用 resume_operation 接續。")
             op = await self.store.operation(key, ctx.event_id, ctx.chat_id, ctx.user_id, f"add_card_{kind}", payload)
             steps = op["steps"]
-            step = partial(self._step, key, steps)
             try:
                 expected = {"folder": payload["folder_id"], "document": steps.get("document", {}).get("id")}
                 if kind == "folder":
@@ -239,32 +333,13 @@ class CardWorkflow:
                 if any(linked[k] and linked[k] != expected[k] for k in (kind, "folder")):
                     raise ValueError("卡片已連結其他資源，停止補建；請先人工查核。")
                 await self.google.preflight(kind == "document")
+                parent = root if kind == "folder" else payload["folder_id"] or root
+                if kind == "document" and payload["folder_id"]:
+                    await self._approved_folder(parent)
                 name = folder_name(payload["title"], payload["due_date"])
-                if kind == "folder":
-                    created = await step(
-                        "folder",
-                        lambda: self.google.find_resource(root, key, "folder"),
-                        lambda: self.google.create_folder(name, key),
-                    )
-                else:
-                    parent = payload["folder_id"] or root
-                    if payload["folder_id"]:
-                        folder = await self.google.metadata(parent)
-                        if folder.get("mimeType") != "application/vnd.google-apps.folder" or root not in folder.get(
-                            "parents", []
-                        ):
-                            raise ValueError("既有資料夾不在核准根目錄下，停止補建。")
-                    created = await step(
-                        "document",
-                        lambda: self.google.find_resource(parent, key, "document"),
-                        lambda: self.google.copy_template(parent, name, key),
-                    )
-                    if not steps.get("document_filled"):
-                        await self.google.fill_document(
-                            created["id"], parent, payload["title"], payload["due_date"], issue["web_url"]
-                        )
-                        steps["document_filled"] = True
-                        await self.store.checkpoint(key, steps)
+                created = await self._make_resource(
+                    kind, key, steps, name, parent, payload["title"], payload["due_date"], issue["web_url"]
+                )
                 # Refresh before appending links so edits since the original request survive.
                 current = await self.gitlab.get(iid)
                 current_folder, current_doc = self._linked_resources(current, resource)

@@ -6,13 +6,13 @@ import re
 from datetime import date
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ...review_packets import ReviewPackets
 from ...services.gitlab import RemoteError
 from ...services.review_documents import ReviewDocuments
 from ...services.sheets_roster import Member
-from ...services.workflow import operation_key, resource_links
+from ...services.workflow import RESOURCE_OPERATIONS, operation_key, resource_links
 from .base import Tool
 from .external_data import wrap_external
 
@@ -72,8 +72,39 @@ class Issue(Args):
     include_notes: bool = False
 
 
-class CardResource(Args):
-    iid: int = Field(gt=0, description="既有卡號（含剛由 create_card 回傳的 iid）；不會另開卡片。")
+class CardFolder(Args):
+    iid: int | None = Field(
+        None, gt=0, description="既有卡號（含剛由 create_card 回傳的）；給了就用卡片的標題與到期日並把連結寫回卡片。"
+    )
+    title: str | None = Field(None, min_length=1, max_length=255, description="不開卡時必填：資料夾／文案主題。")
+    due_date: str | None = Field(None, description="不開卡時必填：YYYY-MM-DD，相對日依本輪台灣日期換算。")
+
+    @field_validator("due_date")
+    @classmethod
+    def valid_date(cls, value):
+        return Create.valid_date(value) if value is not None else None
+
+    @model_validator(mode="after")
+    def needs_card_or_fields(self):
+        if self.iid is None and not (self.title and self.due_date):
+            raise ValueError("沒有卡號時必須提供 title 與 due_date")
+        return self
+
+
+class CardDocument(CardFolder):
+    folder_id: str | None = Field(
+        None,
+        pattern=r"^[A-Za-z0-9_-]+$",
+        description=(
+            "不開卡時可選：把文案放進這個資料夾（例如同一輪剛建好的資料夾 id）；省略就放 Drive 根目錄。有卡號時不要傳。"
+        ),
+    )
+
+    @model_validator(mode="after")
+    def folder_only_without_card(self):
+        if self.iid is not None and self.folder_id:
+            raise ValueError("有卡號時文案放在該卡的資料夾，不要再傳 folder_id")
+        return self
 
 
 class Search(Args):
@@ -270,22 +301,38 @@ class EditorialTools:
             "SELECT * FROM operations WHERE id=? AND chat_id=? AND user_id=?",
             (args.operation_id, ctx.chat_id, ctx.user_id),
         )
-        if not op or op["kind"] not in {"create_card", "add_card_folder", "add_card_document"}:
-            raise ValueError("找不到你在本群的可接續開卡或補建操作。")
-        payload = json.loads(op["payload"])
-        if op["kind"] == "add_card_folder":
-            return await self.workflow.add_folder(payload["iid"], ctx, resume_id=op["id"])
-        if op["kind"] == "add_card_document":
-            return await self.workflow.add_document(payload["iid"], ctx, resume_id=op["id"])
+        if not op or op["kind"] not in RESOURCE_OPERATIONS:
+            raise ValueError("找不到你在本群的可接續開卡、建資料夾或建文案操作。")
+        payload, resume_id = json.loads(op["payload"]), op["id"]
+        match op["kind"]:
+            case "add_card_folder":
+                return await self.workflow.add_folder(payload["iid"], ctx, resume_id=resume_id)
+            case "add_card_document":
+                return await self.workflow.add_document(payload["iid"], ctx, resume_id=resume_id)
+            case "create_folder":
+                return await self.workflow.create_folder(payload, ctx, resume_id=resume_id)
+            case "create_document":
+                return await self.workflow.create_document(payload, ctx, resume_id=resume_id)
         # Saved assignee IDs already passed validation before this operation was persisted.
         await self.members_for_ids(payload["assignee_ids"], user_text=" ".join(map(str, payload["assignee_ids"])))
-        return await self.workflow.create(payload, ctx, resume_id=op["id"])
+        return await self.workflow.create(payload, ctx, resume_id=resume_id)
+
+    def standalone_payload(self, args, ctx):
+        from ...services.dates import validate_explicit_date
+
+        validate_explicit_date(ctx.text, args.due_date, self.settings.tz, reference_time=ctx.reference_time)
+        return {"title": args.title, "due_date": args.due_date}
 
     async def add_folder(self, args, ctx):
-        return await self.workflow.add_folder(args.iid, ctx)
+        if args.iid is not None:
+            return await self.workflow.add_folder(args.iid, ctx)
+        return await self.workflow.create_folder(self.standalone_payload(args, ctx), ctx)
 
     async def add_document(self, args, ctx):
-        return await self.workflow.add_document(args.iid, ctx)
+        if args.iid is not None:
+            return await self.workflow.add_document(args.iid, ctx)
+        payload = {**self.standalone_payload(args, ctx), "folder_id": args.folder_id}
+        return await self.workflow.create_document(payload, ctx)
 
     async def get(self, args, ctx):
         issue = await self.gl.get(args.iid)
@@ -559,19 +606,24 @@ class EditorialTools:
             ),
             FunctionTool(
                 "create_card_folder",
-                "替卡片建立 Drive 資料夾（到期日 MMDD_標題）並把連結寫回卡片；一般開卡預設要做。"
-                "已有資料夾則回傳既有連結，不重開卡。",
-                CardResource,
+                "建立 Drive 資料夾（到期日 MMDD_標題），可單獨使用。"
+                "給 iid：用該卡的標題與到期日並把連結寫回卡片（一般開卡預設要做；已有資料夾則回傳既有連結）。"
+                "不給 iid：改給 title 與 due_date，只建資料夾、不碰 GitLab，"
+                "回傳的 folder_id 可供 create_card_document 使用。",
+                CardFolder,
                 self.add_folder,
             ),
             FunctionTool(
                 "create_card_document",
-                "替卡片複製範本文案 Docs、填入卡片與資料夾連結並寫回卡片；一般開卡預設要做，"
-                "請在 create_card_folder 之後呼叫。卡片沒有資料夾時放在 Drive 根目錄；已有文案則回傳既有連結，不覆蓋。",
-                CardResource,
+                "複製範本文案 Docs 並填入標題、日期與連結，可單獨使用。"
+                "給 iid：放進該卡的資料夾並把連結寫回卡片（一般開卡預設要做，請在 create_card_folder 之後呼叫；"
+                "已有文案則回傳既有連結），此時不可同時給 folder_id，會被拒絕。"
+                "不給 iid：改給 title 與 due_date，不碰 GitLab；"
+                "可用 folder_id 放進剛建好的資料夾，否則放 Drive 根目錄。",
+                CardDocument,
                 self.add_document,
             ),
-            FunctionTool("resume_operation", "接續自己在本群未完成的開卡或補建資料夾／文案操作。", Resume, self.resume),
+            FunctionTool("resume_operation", "接續自己在本群未完成的開卡、建資料夾或建文案操作。", Resume, self.resume),
             FunctionTool("gitlab_get_issue", "讀取卡片、關聯卡及選用人工留言。", Issue, self.get),
             FunctionTool(
                 "gitlab_search_issues",
