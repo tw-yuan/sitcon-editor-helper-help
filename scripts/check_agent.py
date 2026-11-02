@@ -145,7 +145,7 @@ async def main():
             assert len(compact.tool_calls) == 1 and compact.tool_calls[0].name == "create_card", "可確定的日期不應補問"
             parsed = create.args_model.model_validate(compact.tool_calls[0].arguments)
             assert parsed.title == title and parsed.due_date == deadline, f"到期日或標題解析錯誤：{text}"
-            assert parsed.document is document, f"開卡模式解析錯誤：{text}"
+            assert parsed.document_card is document, f"開卡模式解析錯誤：{text}"
             validate_explicit_date(text, parsed.due_date, settings.tz, reference_time=reference_time)
         # Reproduce the reported command, resolving the real assignee without executing create_card.
         resolver = next(tool for tool in tools if tool.name == "resolve_member")
@@ -176,8 +176,9 @@ async def main():
         assert parsed.title == "開源築夢計畫", "DDL 或負責人被錯誤放進標題"
         assert parsed.due_date == reference_time.date().isoformat(), "今天未依本輪時間解析"
         assert parsed.assignee_ids == [member["gitlab_id"]], "未使用名冊中的負責人 ID"
-        assert parsed.document is True, "一般開卡應預設建立文案"
-        add_document = next(tool for tool in tools if tool.name == "add_card_document")
+        assert parsed.document_card is True, "一般開卡應預設為文案卡"
+        add_folder = next(tool for tool in tools if tool.name == "create_card_folder")
+        add_document = next(tool for tool in tools if tool.name == "create_card_document")
         resume = next(tool for tool in tools if tool.name == "resume_operation")
         for request in ("小石，幫 #682 補建資料夾與文案", "資料夾跟文案呢"):
             proposal = await build_llm_client(settings).chat(
@@ -187,13 +188,15 @@ async def main():
                     Message("assistant", [TextBlock("已建立 #682，只有 GitLab 卡片。")]),
                     Message("user", [TextBlock(request)]),
                 ],
-                tools=[create.spec(), add_document.spec(), resume.spec(), ASK_USER_SPEC],
+                tools=[create.spec(), add_folder.spec(), add_document.spec(), resume.spec(), ASK_USER_SPEC],
                 thinking=settings.llm_thinking,
             )
-            assert len(proposal.tool_calls) == 1 and proposal.tool_calls[0].name == "add_card_document", (
+            names = {call.name for call in proposal.tool_calls}
+            assert names and names <= {"create_card_folder", "create_card_document"}, (
                 "既有卡片補建應使用專用工具，不重開卡或猜測操作 ID"
             )
-            assert add_document.args_model.model_validate(proposal.tool_calls[0].arguments).iid == 682
+            for call in proposal.tool_calls:
+                assert add_document.args_model.model_validate(call.arguments).iid == 682
         print(
             json.dumps(
                 {

@@ -52,18 +52,19 @@ async def test_create_accepts_corrected_id_before_cache_expires(tools):
     await tools.roster.get()
     tools.google.roster_values.return_value = sheet("23265503")
     await tools.create(
-        Create(title="製作 IG 精選動態封面", due_date="2026-10-11", document=False, assignee_ids=[23265503]), context()
+        Create(title="製作 IG 精選動態封面", due_date="2026-10-11", document_card=False, assignee_ids=[23265503]),
+        context(),
     )
     payload = tools.workflow.create.call_args.args[0]
     assert payload["assignee_ids"] == [23265503]
-    assert payload["document"] is False
+    assert payload["document_card"] is False
     tools.gl.user_username.assert_awaited_once_with(23265503)
 
 
 async def test_default_assignee_is_refreshed_before_creation(tools):
     await tools.roster.get()
     tools.google.roster_values.return_value = sheet("23265503")
-    await tools.create(Create(title="test", due_date="2026-10-11", document=False), context())
+    await tools.create(Create(title="test", due_date="2026-10-11", document_card=False), context())
     assert tools.workflow.create.call_args.args[0]["assignee_ids"] == [23265503]
 
 
@@ -93,7 +94,7 @@ async def test_explicit_gitlab_correction_does_not_require_editing_roster_first(
     assert member["gitlab_username"] == "octopus"
     assert member["telegram_username"] is None
     await tools.create(
-        Create(title="製作 IG 精選動態封面", due_date="2026-10-11", document=False, assignee_ids=[23265503]), ctx
+        Create(title="製作 IG 精選動態封面", due_date="2026-10-11", document_card=False, assignee_ids=[23265503]), ctx
     )
     assert tools.workflow.create.call_args.args[0]["assignee_ids"] == [23265503]
 
@@ -113,7 +114,9 @@ async def test_explicit_id_must_be_verified_and_outage_is_not_roster_absence(too
     ctx = context()
     ctx.text += "\n23265503"
     with pytest.raises(RemoteError if error else ValueError) as caught:
-        await tools.create(Create(title="test", due_date="2026-10-11", document=False, assignee_ids=[23265503]), ctx)
+        await tools.create(
+            Create(title="test", due_date="2026-10-11", document_card=False, assignee_ids=[23265503]), ctx
+        )
     assert "不在編輯組名冊" not in str(caught.value)
     tools.workflow.create.assert_not_awaited()
 
@@ -137,7 +140,7 @@ async def test_resume_keeps_previously_validated_explicit_assignee(tools, tmp_pa
     try:
         ctx = context()
         key = "a" * 24
-        payload = {"title": "test", "due_date": "2026-10-11", "assignee_ids": [23265503], "document": False}
+        payload = {"title": "test", "due_date": "2026-10-11", "assignee_ids": [23265503], "document_card": False}
         await tools.store.operation(key, "original", ctx.chat_id, ctx.user_id, "create_card", payload)
         ctx.text = f"接續操作 {key}"
         await tools.resume(Resume(operation_id=key), ctx)
@@ -152,7 +155,7 @@ async def test_old_id_is_rejected_after_roster_change_unless_user_explicitly_sup
     tools.google.roster_values.return_value = sheet("23265503")
     with pytest.raises(ValueError, match="使用者未明確提供"):
         await tools.create(
-            Create(title="test", due_date="2026-10-11", document=False, assignee_ids=[7036398656]), context()
+            Create(title="test", due_date="2026-10-11", document_card=False, assignee_ids=[7036398656]), context()
         )
     tools.gl.user_username.assert_not_awaited()
     tools.workflow.create.assert_not_awaited()

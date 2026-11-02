@@ -259,7 +259,7 @@ class Gateway:
             summary = "前次處理途中重新啟動，請查核以下紀錄後接續，避免重複操作。\n"
             for op in ops:
                 summary += f"{op['id']}：{op['kind']}／{op['state']}\n"
-                if op["kind"] in {"create_card", "add_card_document"} and op["state"] == "done":
+                if op["kind"] in {"create_card", "add_card_folder", "add_card_document"} and op["state"] == "done":
                     result = json.loads(op["result"])
                     summary += (
                         "\n".join(result[k] for k in ("issue_url", "folder_url", "document_url") if result.get(k))

@@ -121,10 +121,15 @@ class Google:
             write=True,
         )
 
+    def _in_root(self, folder_id: str, folder: dict) -> bool:
+        # The root itself is the fallback parent for documents of cards without a folder.
+        return folder_id == self.settings.drive_root_folder_id or self.settings.drive_root_folder_id in folder.get(
+            "parents", []
+        )
+
     async def copy_template(self, folder_id: str, name: str, operation: str) -> dict:
         # Folder must remain directly within the configured editorial root.
-        folder = await self.metadata(folder_id)
-        if self.settings.drive_root_folder_id not in folder.get("parents", []):
+        if not self._in_root(folder_id, await self.metadata(folder_id)):
             raise ValueError("文案資料夾不在核准根目錄下。")
         return await self.execute(
             self.drive.files().copy(
@@ -145,8 +150,7 @@ class Google:
         if folder_id not in metadata.get("parents", []):
             raise ValueError("文件與本次資料夾不相符")
         folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-        folder = await self.metadata(folder_id)
-        if self.settings.drive_root_folder_id not in folder.get("parents", []):
+        if not self._in_root(folder_id, await self.metadata(folder_id)):
             raise ValueError("文案資料夾已移出核准根目錄，停止寫入。")
         doc = await self.execute(self.docs.documents().get(documentId=document_id, includeTabsContent=True))
         text = document_text(doc)

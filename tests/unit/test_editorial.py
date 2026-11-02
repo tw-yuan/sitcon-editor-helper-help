@@ -210,50 +210,58 @@ async def test_review_receipt_records_pdf_packet_and_retry_reuses_snapshot(tools
     tools.gl.update.assert_awaited_once()
 
 
-@pytest.mark.parametrize("document", [None, False, True])
-async def test_create_mode_defaults_to_document_and_selects_matching_labels(tools, document):
+@pytest.mark.parametrize("document_card", [None, False, True])
+async def test_create_card_type_only_selects_default_label(tools, document_card):
     args, ctx = await prepare_create(tools)
-    if document is not None:
-        args.document = document
+    if document_card is not None:
+        args.document_card = document_card
     await tools.create(args, ctx)
     payload = tools.workflow.create.call_args.args[0]
-    assert payload["document"] is (document is not False)
-    assert payload["labels"] == ["社群文案" if document is not False else "編輯組專案", "Status::Inbox"]
+    assert payload["labels"] == ["社群文案" if document_card is not False else "編輯組專案", "Status::Inbox"]
+    assert "document" not in payload
 
 
-async def test_add_document_tool_accepts_only_existing_card_number(tools):
+@pytest.mark.parametrize(
+    "name,method", [("create_card_folder", "add_folder"), ("create_card_document", "add_document")]
+)
+async def test_resource_tools_accept_only_existing_card_number(tools, name, method):
     from pydantic import ValidationError
 
-    tools.workflow = SimpleNamespace(add_document=AsyncMock(return_value={"iid": 682}))
-    tool = next(t for t in tools.build() if t.name == "add_card_document")
+    tools.workflow = SimpleNamespace(**{method: AsyncMock(return_value={"iid": 682})})
+    tool = next(t for t in tools.build() if t.name == name)
     ctx = context()
     await tool.run(tool.args_model(iid=682), ctx)
-    tools.workflow.add_document.assert_awaited_once_with(682, ctx)
+    getattr(tools.workflow, method).assert_awaited_once_with(682, ctx)
     with pytest.raises(ValidationError):
         tool.args_model(iid=0)
     with pytest.raises(ValidationError):
         tool.args_model(iid=682, folder_id="arbitrary")
 
 
+@pytest.mark.parametrize("kind,method", [("add_card_document", "add_document"), ("add_card_folder", "add_folder")])
 @pytest.mark.parametrize("owner", ["same", "other_user", "other_chat"])
-async def test_resume_document_dispatches_only_original_owner_operation(tools, owner):
+async def test_resume_resource_dispatches_only_original_owner_operation(tools, owner, kind, method):
     from editorial_bot.agent.tools.editorial import Resume
 
     ctx = context()
     key = "a" * 24
-    await tools.store.operation(key, "first", ctx.chat_id, ctx.user_id, "add_card_document", {"iid": 682})
-    tools.workflow = SimpleNamespace(add_document=AsyncMock(return_value={"iid": 682}), create=AsyncMock())
+    await tools.store.operation(key, "first", ctx.chat_id, ctx.user_id, kind, {"iid": 682})
+    tools.workflow = SimpleNamespace(
+        add_document=AsyncMock(return_value={"iid": 682}),
+        add_folder=AsyncMock(return_value={"iid": 682}),
+        create=AsyncMock(),
+    )
     if owner == "other_user":
         ctx.user_id += 1
     elif owner == "other_chat":
         ctx.chat_id -= 1
     if owner == "same":
         await tools.resume(Resume(operation_id=key), ctx)
-        tools.workflow.add_document.assert_awaited_once_with(682, ctx, resume_id=key)
+        getattr(tools.workflow, method).assert_awaited_once_with(682, ctx, resume_id=key)
     else:
         with pytest.raises(ValueError, match="找不到"):
             await tools.resume(Resume(operation_id=key), ctx)
-        tools.workflow.add_document.assert_not_awaited()
+        getattr(tools.workflow, method).assert_not_awaited()
     tools.workflow.create.assert_not_awaited()
 
 

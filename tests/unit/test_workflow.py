@@ -6,7 +6,7 @@ import pytest
 
 from editorial_bot.agent.tools.base import ToolContext
 from editorial_bot.services.gitlab import RemoteError
-from editorial_bot.services.workflow import CardWorkflow
+from editorial_bot.services.workflow import CardWorkflow, operation_key
 from editorial_bot.storage.db import Store
 
 
@@ -46,39 +46,128 @@ async def setup(tmp_path):
     await store.close()
 
 
-async def test_resume_after_document_failure_does_not_duplicate_resources(setup):
+@pytest.fixture
+def new_card(setup):
+    """GitLab stub whose issue mirrors create() and later description updates, as the three-step flow needs."""
     workflow, google, gitlab, store, ctx, payload = setup
+    issue = gitlab.get.return_value
+    issue["due_date"] = payload["due_date"]
+
+    async def create(fields):
+        issue.update(description=fields["description"])
+        return dict(issue)
+
+    async def update(iid, **fields):
+        issue.update(fields)
+        return dict(issue)
+
+    gitlab.create.side_effect = create
+    gitlab.update = AsyncMock(side_effect=update)
+    google.metadata = AsyncMock(
+        return_value={"id": "folder", "mimeType": "application/vnd.google-apps.folder", "parents": ["root"]}
+    )
+    return workflow, google, gitlab, store, ctx, payload, issue
+
+
+async def test_default_flow_card_then_folder_then_document_links_everything(new_card):
+    workflow, google, gitlab, store, ctx, payload, issue = new_card
+    card = await workflow.create(payload, ctx)
+    assert card["folder_url"] is None and card["document_url"] is None
+    folder = await workflow.add_folder(card["iid"], ctx)
+    assert folder["folder_url"].endswith("/folder") and folder["document_url"] is None
+    google.create_folder.assert_awaited_once_with("1015_測試", folder["operation_id"])
+    doc = await workflow.add_document(card["iid"], ctx)
+    assert doc["folder_url"].endswith("/folder") and doc["document_url"].endswith("/doc/edit")
+    assert "note" not in doc
+    google.copy_template.assert_awaited_once_with("folder", "1015_測試", doc["operation_id"])
+    google.fill_document.assert_awaited_once_with("doc", "folder", "測試", "2026-10-15", issue["web_url"])
+    description = issue["description"]
+    assert description.count("資料夾：https://drive.google.com/drive/folders/folder") == 1
+    assert description.count("文案：https://docs.google.com/document/d/doc/edit") == 1
+    assert "\n\n資料夾：" in description and "\n\n文案：" in description
+    assert "editorial-operation:" in description
+    resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
+    assert resource["folder_id"] == "folder" and resource["document_id"] == "doc"
+    gitlab.create.assert_awaited_once()
+    assert gitlab.update.await_count == 2
+    # Repeating any step returns the receipt without new writes.
+    ctx.event_id = "again"
+    assert await workflow.add_folder(2, ctx) == folder and await workflow.add_document(2, ctx) == doc
+    google.create_folder.assert_awaited_once()
+    google.copy_template.assert_awaited_once()
+
+
+async def test_document_without_folder_falls_back_to_root_and_reports_it(new_card):
+    workflow, google, _gitlab, store, ctx, payload, issue = new_card
+    card = await workflow.create(payload, ctx)
+    doc = await workflow.add_document(card["iid"], ctx)
+    assert doc["folder_url"] is None and doc["document_url"].endswith("/doc/edit")
+    assert "根目錄" in doc["note"]
+    google.create_folder.assert_not_awaited()
+    google.copy_template.assert_awaited_once_with("root", "1015_測試", doc["operation_id"])
+    google.fill_document.assert_awaited_once_with("doc", "root", "測試", "2026-10-15", issue["web_url"])
+    assert (
+        "資料夾：" not in issue["description"]
+        and "文案：https://docs.google.com/document/d/doc/edit" in issue["description"]
+    )
+    resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
+    assert resource["folder_id"] is None and resource["document_id"] == "doc"
+    # A folder added afterwards keeps the document mapping and only appends its own link.
+    folder = await workflow.add_folder(2, ctx)
+    assert folder["document_url"].endswith("/doc/edit") and folder["folder_url"].endswith("/folder")
+    resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
+    assert resource["folder_id"] == "folder" and resource["document_id"] == "doc"
+    assert issue["description"].count("文案：") == 1 and issue["description"].count("資料夾：") == 1
+
+
+async def test_document_waits_for_unfinished_folder_instead_of_falling_back_to_root(new_card):
+    workflow, google, gitlab, store, ctx, payload, _issue = new_card
+    await workflow.create(payload, ctx)
+    gitlab.update.side_effect = RemoteError("GitLab", 503)
+    with pytest.raises(ValueError, match="操作"):
+        await workflow.add_folder(2, ctx)
+    with pytest.raises(ValueError, match="資料夾操作"):
+        await workflow.add_document(2, ctx)
+    google.copy_template.assert_not_awaited()
+    assert await store.one("SELECT 1 FROM operations WHERE kind='add_card_document'") is None
+
+
+async def test_folder_resume_after_document_failure_does_not_duplicate_resources(new_card):
+    workflow, google, _gitlab, store, ctx, payload, issue = new_card
+    await workflow.create(payload, ctx)
+    await workflow.add_folder(2, ctx)
     google.fill_document.side_effect = RemoteError("Google", 503, uncertain=True)
     with pytest.raises(ValueError, match="操作"):
-        await workflow.create(payload, ctx)
-    operation = await store.one("SELECT * FROM operations")
+        await workflow.add_document(2, ctx)
+    operation = await store.one("SELECT * FROM operations WHERE kind='add_card_document'")
     google.fill_document.side_effect = None
     ctx.event_id = "resume-event"
-    result = await workflow.create(payload, ctx, resume_id=operation["id"])
-    assert result["folder_url"].endswith("/folder")
-    assert result["document_url"].endswith("/doc/edit")
-    google.create_folder.assert_awaited_once_with("1015_測試", operation["id"])
+    result = await workflow.add_document(2, ctx, resume_id=operation["id"])
+    assert result["folder_url"].endswith("/folder") and result["document_url"].endswith("/doc/edit")
+    google.create_folder.assert_awaited_once()
     google.copy_template.assert_awaited_once()
-    gitlab.create.assert_awaited_once()
-    description = gitlab.create.call_args.args[0]["description"]
-    assert result["folder_url"] in description and result["document_url"] in description
-    assert await workflow.create(payload, ctx, resume_id=operation["id"]) == result
+    assert result["folder_url"] in issue["description"] and result["document_url"] in issue["description"]
+    assert await workflow.add_document(2, ctx, resume_id=operation["id"]) == result
 
 
-async def test_ambiguous_write_is_not_repeated_if_resource_not_found(setup):
-    workflow, google, _gitlab, store, ctx, payload = setup
+async def test_ambiguous_folder_write_is_not_repeated_if_resource_not_found(new_card):
+    workflow, google, _gitlab, store, ctx, payload, _issue = new_card
+    await workflow.create(payload, ctx)
     google.create_folder.side_effect = RemoteError("Google", None, uncertain=True)
     with pytest.raises(ValueError):
-        await workflow.create(payload, ctx)
-    operation = await store.one("SELECT id FROM operations")
+        await workflow.add_folder(2, ctx)
+    operation = await store.one("SELECT id FROM operations WHERE kind='add_card_folder'")
     with pytest.raises(ValueError, match="結果仍不明"):
-        await workflow.create(payload, ctx, resume_id=operation["id"])
+        await workflow.add_folder(2, ctx, resume_id=operation["id"])
+    google.create_folder.assert_awaited_once()
+    google.find_resource.side_effect = [{"id": "folder"}]
+    result = await workflow.add_folder(2, ctx, resume_id=operation["id"])
+    assert result["folder_url"].endswith("/folder")
     google.create_folder.assert_awaited_once()
 
 
 async def test_task_card_only_creates_gitlab_issue_even_if_drive_is_unavailable(setup):
     workflow, google, gitlab, store, ctx, payload = setup
-    payload["document"] = False
     for method in vars(google).values():
         method.side_effect = AssertionError("僅開卡不得存取 Drive 或 Docs")
     result = await workflow.create(payload, ctx)
@@ -105,38 +194,21 @@ async def test_invalid_labels_stop_before_google_write(setup):
     google.create_folder.assert_not_awaited()
 
 
-async def test_unknown_write_can_recover_using_remote_operation_marker(setup):
-    workflow, google, _gitlab, store, ctx, payload = setup
-    google.create_folder.side_effect = RemoteError("Google", None, uncertain=True)
-    with pytest.raises(ValueError):
-        await workflow.create(payload, ctx)
-    operation = await store.one("SELECT id FROM operations")
-    google.find_resource.side_effect = [{"id": "folder"}, None]
-    await workflow.create(payload, ctx, resume_id=operation["id"])
-    google.create_folder.assert_awaited_once()
-
-
-@pytest.mark.parametrize("document", [True, False])
-async def test_resource_links_render_as_separate_paragraphs(setup, document):
+async def test_resource_links_render_as_separate_paragraphs(setup):
     workflow, _google, gitlab, store, ctx, payload = setup
-    # Historical payloads may still include requester metadata; it must not be rendered.
-    payload.update(document=document, requester="@gitlab_writer", description="原有說明")
+    # Historical payloads may still include requester / document flags; they must not be rendered or acted on.
+    payload.update(document=True, requester="@gitlab_writer", description="原有說明")
     await workflow.create(payload, ctx)
     description = gitlab.create.call_args.args[0]["description"]
     assert "建立者：" not in description and "@gitlab_writer" not in description
     assert "\n\n<!-- editorial-operation:" in description
     assert (await store.one("SELECT user_id FROM operations"))["user_id"] == ctx.user_id
-    if document:
-        assert "\n\n資料夾：https://drive.google.com/drive/folders/folder\n\n" in description
-        assert "\n\n文案：https://docs.google.com/document/d/doc/edit\n\n" in description
-    else:
-        assert "資料夾：" not in description and "文案：" not in description
+    assert "資料夾：" not in description and "文案：" not in description
     assert description.startswith("原有說明\n\n")
 
 
 async def test_task_card_unknown_gitlab_write_resumes_without_google_or_duplicate_issue(setup):
     workflow, google, gitlab, store, ctx, payload = setup
-    payload["document"] = False
     gitlab.create.side_effect = RemoteError("GitLab", None, uncertain=True)
     with pytest.raises(ValueError, match="操作"):
         await workflow.create(payload, ctx)
@@ -156,7 +228,6 @@ async def test_task_card_unknown_gitlab_write_resumes_without_google_or_duplicat
 
 async def test_legacy_task_resume_preserves_existing_folder_without_google_calls(setup):
     workflow, google, gitlab, store, ctx, payload = setup
-    payload["document"] = False
     payload["requester"] = "@legacy_writer"
     op = await store.operation("legacy-task", ctx.event_id, ctx.chat_id, ctx.user_id, "create_card", payload)
     await store.checkpoint(op["id"], {"folder": {"id": "old-folder"}}, "error")
@@ -171,7 +242,6 @@ async def test_legacy_task_resume_preserves_existing_folder_without_google_calls
 
 async def test_legacy_task_with_unknown_folder_write_does_not_start_new_steps(setup):
     workflow, google, gitlab, store, ctx, payload = setup
-    payload["document"] = False
     op = await store.operation("legacy-unknown", ctx.event_id, ctx.chat_id, ctx.user_id, "create_card", payload)
     await store.checkpoint(op["id"], {"pending": "folder"}, "uncertain")
     with pytest.raises(ValueError, match="人工查核"):
@@ -202,24 +272,43 @@ async def existing_card(setup):
     return workflow, google, gitlab, store, ctx, issue
 
 
-async def test_add_document_preserves_existing_card_and_deduplicates_across_events(existing_card):
+async def test_add_folder_and_document_preserve_existing_card_and_deduplicate_across_events(existing_card):
     workflow, google, gitlab, store, ctx, issue = existing_card
     original = dict(issue)
+    folder = await workflow.add_folder(2, ctx)
     result = await workflow.add_document(2, ctx)
     assert result["iid"] == 2 and result["document_url"].endswith("/doc/edit")
     assert issue["description"].startswith(original["description"])
     assert result["folder_url"] in issue["description"] and result["document_url"] in issue["description"]
     for field in ("title", "due_date", "labels", "assignees"):
         assert issue[field] == original[field]
-    google.create_folder.assert_awaited_once_with("1005_測試", result["operation_id"])
+    google.create_folder.assert_awaited_once_with("1005_測試", folder["operation_id"])
     google.fill_document.assert_awaited_once_with("doc", "folder", "測試", "2026-10-05", issue["web_url"])
     resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
     assert resource["folder_id"] == "folder" and resource["document_id"] == "doc"
     ctx.event_id = "new-request"
+    assert await workflow.add_folder(2, ctx) == folder
     assert await workflow.add_document(2, ctx) == result
     gitlab.create.assert_not_awaited()
+    google.create_folder.assert_awaited_once()
     google.copy_template.assert_awaited_once()
-    gitlab.update.assert_awaited_once()
+    assert gitlab.update.await_count == 2
+
+
+async def test_pre_split_document_operation_resumes_in_the_folder_it_created(existing_card):
+    workflow, google, _gitlab, store, ctx, issue = existing_card
+    key = operation_key("issue:2", "add_card_document", {"iid": 2})
+    payload = {"iid": 2, "title": "測試", "due_date": "2026-10-05", "folder_id": None}
+    await store.operation(key, "old", ctx.chat_id, ctx.user_id, "add_card_document", payload)
+    await store.checkpoint(key, {"folder": {"id": "old-folder"}}, "error")
+    result = await workflow.add_document(2, ctx, resume_id=key)
+    google.create_folder.assert_not_awaited()
+    google.copy_template.assert_awaited_once_with("old-folder", "1005_測試", key)
+    google.fill_document.assert_awaited_once_with("doc", "old-folder", "測試", "2026-10-05", issue["web_url"])
+    assert result["folder_url"].endswith("/old-folder") and result["document_url"].endswith("/doc/edit")
+    assert result["folder_url"] in issue["description"] and result["document_url"] in issue["description"]
+    resource = await store.one("SELECT * FROM resources WHERE issue_iid=2")
+    assert resource["folder_id"] == "old-folder" and resource["document_id"] == "doc"
 
 
 @pytest.mark.parametrize("failure", ["copy_template", "fill_document", "update"])
@@ -236,8 +325,9 @@ async def test_add_document_resumes_after_failure_without_duplicate_resources(ex
     ctx.event_id = "resume"
     result = await workflow.add_document(2, ctx, resume_id=op["id"])
     assert result["operation_id"] == op["id"]
-    google.create_folder.assert_awaited_once()
+    google.create_folder.assert_not_awaited()
     assert google.copy_template.await_count == (2 if failure == "copy_template" else 1)
+    assert google.copy_template.call_args.args[0] == "root"
     gitlab.create.assert_not_awaited()
 
 
@@ -292,8 +382,13 @@ async def test_add_document_reuses_existing_folder(existing_card):
     workflow, google, _gitlab, store, ctx, issue = existing_card
     await store.execute("UPDATE resources SET folder_id='folder' WHERE issue_iid=2")
     issue["description"] += "\n資料夾：https://drive.google.com/drive/folders/folder"
+    result = await workflow.add_folder(2, ctx)
+    assert result["already_exists"] and result["folder_url"].endswith("/folder")
     await workflow.add_document(2, ctx)
     google.create_folder.assert_not_awaited()
+    google.copy_template.assert_awaited_once_with(
+        "folder", "1005_測試", operation_key("issue:2", "add_card_document", {"iid": 2})
+    )
     assert issue["description"].count("https://drive.google.com/drive/folders/folder") == 1
 
 
@@ -333,11 +428,13 @@ async def test_add_document_concurrent_requests_share_one_resource_set(existing_
     import asyncio
 
     workflow, google, gitlab, _store, ctx, _issue = existing_card
+    first, second = await asyncio.gather(workflow.add_folder(2, ctx), workflow.add_folder(2, ctx))
+    assert first == second
     first, second = await asyncio.gather(workflow.add_document(2, ctx), workflow.add_document(2, ctx))
     assert first == second
     google.create_folder.assert_awaited_once()
     google.copy_template.assert_awaited_once()
-    gitlab.update.assert_awaited_once()
+    assert gitlab.update.await_count == 2
 
 
 async def test_add_document_retry_detects_newly_linked_document_before_more_writes(existing_card):

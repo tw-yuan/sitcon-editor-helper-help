@@ -99,7 +99,7 @@ Agent 續接時，除原始使用者訊息，也依原 `ask_user` 呼叫 ID 取�
 
 ## 開卡資料流
 
-`create_card.document` 預設為 `true`，一般開卡建立 GitLab Issue、Drive 資料夾與範本 Docs。只有使用者明確要求「僅開卡／只開卡／不要資料夾、文案或文件」時才設為 `false`。不因標題、圖片或 label 自行略過文件；兩種模式仍使用 Sheets 名冊查核負責人。這個預設依 2026-10-05 的需求調整，既有操作保存的 `document=false` 不會被覆寫，重試仍遵守當時的選擇。
+自 2026-11-02 起開卡拆成三個獨立工具：`create_card` 只建 GitLab Issue，`create_card_folder(iid)` 建資料夾、`create_card_document(iid)` 建範本文案，後兩者各自把連結追加到卡片說明並更新 `resources` 對照。預設三個都做由系統提示與工具描述引導模型決定：一般「開卡」依序呼叫三者；「僅開卡／只開卡／不要文件」只呼叫 `create_card`（`document_card=false` 改用任務 label）；「要資料夾不要文案」等指定範圍照指定呼叫；既有卡片可隨時補建其中一項。只建文案不建資料夾時，文案放在 Drive 根目錄並在回報說明。不因標題、圖片或 label 自行略過資料夾／文案；各工具仍使用 Sheets 名冊查核負責人。下列步驟描述三者合起來的結果。
 
 1. 使用者提供標題與到期日。支援獨立四位數 MMDD；「小石開卡 0925 test」直接解析為當年 09/25 到期、標題 test，無需補問。MMDD 使用真實日曆驗證，卡號及較長識別碼不當作日期。缺年份用台灣當前年份；「今天／今日、明天／明日、後天（也接受后天）」依本輪台灣日期加 0、1、2 日直接換算，跨月、跨年及閏年依日曆處理，不另問同意。「下週某天、過幾天」等無法唯一確定日期才補問。日期必須來自使用者的指令／續接脈絡，不接受模型編造的日期。
 2. 將指定 nickname 或 Telegram username 精確對應最新名冊的 GitLab ID，或查證使用者明確提供的 GitLab ID；同名列候選補問，未指定時採唯一 `default=yes`，回覆明示。
@@ -207,8 +207,10 @@ Agent 文字原本即以 `parse_mode=None` 發送；補問選項改用「選項 
 | 工具 | 功能 |
 | --- | --- |
 | resolve_member | 即時重讀名冊，以 nickname／Telegram username 精確查人、解析「我」；同名回傳候選，直接提供 GitLab ID 時查證帳號。 |
-| create_card／resume_operation | 開卡及接續部分完成的開卡／補建流程。 |
-| add_card_document | 依既有卡號補建資料夾與範本文案，保留原卡並去重。 |
+| create_card | 只建立 GitLab 卡片並回傳卡號；`document_card` 只決定預設分類 label。 |
+| create_card_folder | 依卡號建立 `MMDD_TITLE` Drive 資料夾並把連結寫回卡片；已有則回傳既有連結。 |
+| create_card_document | 依卡號複製範本文案到卡片資料夾（沒有資料夾則放根目錄並說明）、填入連結並寫回卡片；已有則回傳既有連結。 |
+| resume_operation | 接續部分完成的開卡／補建資料夾／補建文案操作。 |
 | gitlab_get_issue | 卡片、關聯卡及選讀留言。 |
 | gitlab_search_issues | 標題、label、負責人、狀態、日期篩選，預設 opened 含 Review。 |
 | gitlab_update_issue | 標題、description、到期日、負責人、既有 label、狀態。 |

@@ -46,9 +46,12 @@ class Create(Args):
             "DDL／deadline 日期轉成 YYYY-MM-DD；今天／明天／後天依本輪台灣日期換算，不需補問；未給年份用台灣當前年份。"
         )
     )
-    document: bool = Field(
+    document_card: bool = Field(
         True,
-        description="預設 true，建立 GitLab 卡片、Drive 資料夾與範本 Docs；明確要求只開卡或不要文件才為 false。",
+        description=(
+            "只決定預設 label：true 為文案卡（社群文案），false 為純任務卡（編輯組專案）。"
+            "本工具只建 GitLab 卡片；資料夾與文案要另外呼叫 create_card_folder／create_card_document。"
+        ),
     )
     description: str = ""
     labels: list[str] = Field(default_factory=list, description="精確使用既有 label；空值採文案／任務預設分類。")
@@ -69,8 +72,8 @@ class Issue(Args):
     include_notes: bool = False
 
 
-class AddDocument(Args):
-    iid: int = Field(gt=0, description="要補建資料夾與範本文案的既有卡號；不會另開卡片。")
+class CardResource(Args):
+    iid: int = Field(gt=0, description="既有卡號（含剛由 create_card 回傳的 iid）；不會另開卡片。")
 
 
 class Search(Args):
@@ -249,7 +252,7 @@ class EditorialTools:
         ids = args.assignee_ids or [roster.default_member().gitlab_id]
         await self.members_for_ids(ids, roster=roster, user_text=ctx.text)
         labels = args.labels or [
-            self.settings.default_document_label if args.document else self.settings.default_task_label
+            self.settings.default_document_label if args.document_card else self.settings.default_task_label
         ]
         if not any(s.startswith("Status::") for s in labels):
             labels = [*labels, self.settings.initial_status]
@@ -267,14 +270,19 @@ class EditorialTools:
             "SELECT * FROM operations WHERE id=? AND chat_id=? AND user_id=?",
             (args.operation_id, ctx.chat_id, ctx.user_id),
         )
-        if not op or op["kind"] not in {"create_card", "add_card_document"}:
+        if not op or op["kind"] not in {"create_card", "add_card_folder", "add_card_document"}:
             raise ValueError("找不到你在本群的可接續開卡或補建操作。")
         payload = json.loads(op["payload"])
+        if op["kind"] == "add_card_folder":
+            return await self.workflow.add_folder(payload["iid"], ctx, resume_id=op["id"])
         if op["kind"] == "add_card_document":
             return await self.workflow.add_document(payload["iid"], ctx, resume_id=op["id"])
         # Saved assignee IDs already passed validation before this operation was persisted.
         await self.members_for_ids(payload["assignee_ids"], user_text=" ".join(map(str, payload["assignee_ids"])))
         return await self.workflow.create(payload, ctx, resume_id=op["id"])
+
+    async def add_folder(self, args, ctx):
+        return await self.workflow.add_folder(args.iid, ctx)
 
     async def add_document(self, args, ctx):
         return await self.workflow.add_document(args.iid, ctx)
@@ -544,17 +552,26 @@ class EditorialTools:
             ),
             FunctionTool(
                 "create_card",
-                "開卡：預設建立 GitLab 卡片、MMDD_TITLE 資料夾與範本 Docs；明確只開卡才略過文件。只用既有 label。",
+                "開卡第一步：只建立 GitLab 卡片並回傳 iid。只用既有 label。"
+                "一般開卡接著要用回傳的 iid 呼叫 create_card_folder 與 create_card_document。",
                 Create,
                 self.create,
             ),
             FunctionTool(
-                "add_card_document",
-                "替既有卡片補建資料夾與範本 Docs，使用卡片到期日；已有文案則回傳連結，不重開卡或覆蓋文件。",
-                AddDocument,
+                "create_card_folder",
+                "替卡片建立 Drive 資料夾（到期日 MMDD_標題）並把連結寫回卡片；一般開卡預設要做。"
+                "已有資料夾則回傳既有連結，不重開卡。",
+                CardResource,
+                self.add_folder,
+            ),
+            FunctionTool(
+                "create_card_document",
+                "替卡片複製範本文案 Docs、填入卡片與資料夾連結並寫回卡片；一般開卡預設要做，"
+                "請在 create_card_folder 之後呼叫。卡片沒有資料夾時放在 Drive 根目錄；已有文案則回傳既有連結，不覆蓋。",
+                CardResource,
                 self.add_document,
             ),
-            FunctionTool("resume_operation", "接續自己在本群未完成的開卡或補建文案操作。", Resume, self.resume),
+            FunctionTool("resume_operation", "接續自己在本群未完成的開卡或補建資料夾／文案操作。", Resume, self.resume),
             FunctionTool("gitlab_get_issue", "讀取卡片、關聯卡及選用人工留言。", Issue, self.get),
             FunctionTool(
                 "gitlab_search_issues",

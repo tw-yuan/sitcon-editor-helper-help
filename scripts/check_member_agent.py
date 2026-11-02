@@ -90,7 +90,7 @@ async def check_case(settings, store, name, req, *, stale_sheet=False, ambiguous
     else:
         assert len(proposed) == 1, f"{name}: 未提出開卡，reply={result.reply if result else ''}"
         card = proposed[0]
-        assert card.title == TITLE and card.document is False, f"{name}: 未遵守原標題與不要文件"
+        assert card.title == TITLE and card.document_card is False, f"{name}: 未遵守原標題與不要文件"
         assert card.due_date == f"{datetime.now(ZoneInfo(settings.tz)).year}-10-11", f"{name}: 原日期遺失"
         assert card.assignee_ids == [NEW_ID], f"{name}: 未採用更正後 ID"
         if stale_sheet:
