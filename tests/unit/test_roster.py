@@ -24,6 +24,22 @@ def test_actual_editorial_headers_and_roles():
     assert roster.search_by_name("Writer")[0].gitlab_id == 10
 
 
+async def test_prompt_carries_roster_csv_with_taggable_usernames():
+    from editorial_bot.agent.prompts import PromptBuilder
+
+    roster = Roster([Member(11, "leader_a", "Lead, A", position="總召"), Member(12, None, "Deputy", telegram_id=42)])
+    csv_text = roster.to_csv()
+    assert csv_text.splitlines() == [
+        "nickname,telegram,gitlab_id,default,note",
+        '"Lead, A",@leader_a,11,,總召',
+        "Deputy,42,12,,",
+    ]
+    prompt = await PromptBuilder(
+        SimpleNamespace(tz="Asia/Taipei"), SimpleNamespace(all=AsyncMock(return_value=[]))
+    ).build(chat_id=-1, roster_csv=csv_text)
+    assert '"Lead, A",@leader_a,11,,總召' in prompt
+
+
 def test_nickname_lookup_is_exact_and_returns_all_ambiguous_matches():
     roster = Roster([Member(1, "octopus", "章魚"), Member(2, "writer_b", "章魚"), Member(3, "writer_c", "octopus")])
     assert [m.gitlab_id for m in roster.search_by_name(" 章魚 ")] == [1, 2]

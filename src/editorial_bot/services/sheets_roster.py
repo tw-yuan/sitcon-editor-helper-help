@@ -1,9 +1,11 @@
 """The editorial 'user' sheet is the sole member directory."""
 
 import asyncio
+import csv
+import io
 import re
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 
 
 class RosterUnavailableError(RuntimeError):
@@ -56,8 +58,14 @@ class Roster:
         # shortcut: "副總召"/"前總召" would also match, add exclusions if the roster ever uses them.
         return [m for m in self.members if "總召" in m.position or "副召" in m.position]
 
-    def to_llm_rows(self) -> list[dict]:
-        return [asdict(m) for m in self.members]
+    def to_csv(self) -> str:
+        out = io.StringIO()
+        writer = csv.writer(out, lineterminator="\n")
+        writer.writerow(["nickname", "telegram", "gitlab_id", "default", "note"])
+        for m in self.members:
+            telegram = "@" + m.telegram_username if m.telegram_username else m.telegram_id or ""
+            writer.writerow([m.nickname, telegram, m.gitlab_id, "yes" if m.default else "", m.position])
+        return out.getvalue()
 
 
 def parse_roster(values: list[list[str]]) -> Roster:
