@@ -52,7 +52,9 @@ class Roster:
         return matches[0]
 
     def chiefs(self) -> list[Member]:
-        return [m for m in self.members if set(re.split(r"[、,;/\s]+", m.position)) & {"總召", "副召"}]
+        # note is free text such as "副召兼組員", so match by substring rather than by token.
+        # shortcut: "副總召"/"前總召" would also match, add exclusions if the roster ever uses them.
+        return [m for m in self.members if "總召" in m.position or "副召" in m.position]
 
     def to_llm_rows(self) -> list[dict]:
         return [asdict(m) for m in self.members]

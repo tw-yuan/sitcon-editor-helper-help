@@ -13,7 +13,7 @@ def test_actual_editorial_headers_and_roles():
             ["Telegram ID", "gitlab_id", "Nickname", "default", "note"],
             ["writer_a", "10", "Writer", "yes"],
             ["leader_a", "11", "Lead", "no", "總召"],
-            ["deputy_a", "12", "Deputy", "no", "副召"],
+            ["deputy_a", "12", "Deputy", "no", "副召兼組員"],
         ]
     )
     assert roster.default_member().gitlab_id == 10

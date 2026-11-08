@@ -65,6 +65,15 @@ async def test_review_all_targets_tags_author_and_both_chiefs_once(tools):
         assert "資料夾：https://drive.google.com/drive/folders/folder" in notice
 
 
+async def test_review_proceeds_without_chiefs_in_roster(tools):
+    tools.roster.get.return_value = Roster([Member(1, "author_one"), Member(3, "", "Deputy", position="副召")])
+    ctx = context()
+    await tools.review(Review(targets=["1"]), ctx)
+    tools.gl.update.assert_awaited_once()
+    assert ctx.review_completed
+    assert "@author_one" in ctx.notices[0] and "未能標註：Deputy" in ctx.notices[0]
+
+
 async def test_ambiguous_review_target_stops_entire_batch(tools):
     tools.gl.resolve.side_effect = [{"iid": 1}, ValueError("multiple matches")]
     with pytest.raises(ValueError):

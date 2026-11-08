@@ -445,9 +445,8 @@ class EditorialTools:
             raise ValueError("包含已關閉卡片，請明確重新開啟後再送審。")
         roster = await self.roster.get(force=True)
         chiefs = roster.chiefs()
-        roles = {role for m in chiefs for role in re.split(r"[、,;/\s]+", m.position)}
-        if not {"總召", "副召"}.issubset(roles) or any(not mention(m) for m in chiefs):
-            raise ValueError("名冊 note 欄缺少可標註的總召／副召，請先修正名冊。")
+        # Missing or untaggable chiefs must not block review; the notice says who could not be tagged.
+        reviewers = "、".join(dict.fromkeys(filter(None, map(mention, chiefs)))) or "總召／副召（名冊找不到可標註的人）"
         await self.gl.validate_labels([self.settings.review_status], required=True)
         prepared = []
         for issue in issues:
@@ -467,7 +466,7 @@ class EditorialTools:
             ):
                 raise ValueError(f"#{issue['iid']} 找不到文案連結，請補上再送審。")
             authors = []
-            missing = []
+            missing = [m.nickname for m in chiefs if not mention(m)]
             for assignee in issue.get("assignees", []):
                 member = roster.by_gitlab(assignee["id"])
                 if member and mention(member):
@@ -478,7 +477,7 @@ class EditorialTools:
             notice = (
                 f"這是由 {who} 負責的 #{issue['iid']} {html.escape(issue['title'])} {'文案' if docs else '任務'}，請 "
             )
-            notice += "、".join(dict.fromkeys(mention(m) for m in chiefs)) + " 幫忙 review\n"
+            notice += reviewers + " 幫忙 review\n"
             links = [("文案", url) for url in docs[:1]]
             links.extend(("資料夾", url) for url in folders[:1])
             links.append(("卡片", issue["web_url"]))
