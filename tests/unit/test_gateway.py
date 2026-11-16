@@ -292,6 +292,37 @@ async def issue_question(gateway, options):
     return bot, pending, menu
 
 
+@pytest.mark.parametrize("options", [[], ["甲", "乙"]])
+async def test_admin_answer_keeps_the_conversation_with_the_original_asker(gateway, options):
+    from editorial_bot.agent.context import Pending
+    from editorial_bot.agent.core import AgentResult
+
+    bot, pending, menu = await issue_question(gateway, options)  # asked by user 8; the admin is user 7
+    followup = Pending([], [], "ask2", options=options)
+    gateway.agent.handle.return_value = AgentResult("下一題", status="clarify", pending=followup)
+    by_admin = update(user=7, text="14552158")
+    by_admin.update_id = 11
+    by_admin.effective_message.reply_to_message = menu
+    await gateway.handle(by_admin, SimpleNamespace(bot=bot))
+    assert gateway.agent.handle.call_args.args[0].resume is pending
+    second = SimpleNamespace(
+        message_id=457,
+        message_thread_id=55,
+        text="下一題",
+        caption=None,
+        reply_markup=bot.send_message.call_args.kwargs["reply_markup"],
+        from_user=SimpleNamespace(id=99),
+        reply_to_message=None,
+    )
+    gateway.agent.handle.return_value = AgentResult("完成")
+    bot.send_message.return_value = SimpleNamespace(message_id=458)
+    by_asker = update(user=8, text="乙" if options else "10/15")
+    by_asker.update_id = 12
+    by_asker.effective_message.reply_to_message = second
+    await gateway.handle(by_asker, SimpleNamespace(bot=bot))
+    assert gateway.agent.handle.call_args.args[0].resume is followup
+
+
 def choose_update(menu, index=0, user=8):
     incoming = update(user=user)
     incoming.update_id = 10

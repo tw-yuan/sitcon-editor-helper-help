@@ -439,6 +439,12 @@ class Gateway:
                 if choice
                 else (self.conversation(chat.id, reply.message_id, user.id, thread) if reply_to_bot else None)
             )
+            # A conversation stays with whoever started it, even when the admin steps in to answer.
+            owner = user.id
+            if choice:
+                owner = choice.entry.user_id
+            elif previous:
+                owner = self.sessions[(chat.id, reply.message_id)][1]
             answer_error = None
             if not callback and reply_to_bot:
                 if previous and previous.pending and previous.pending.options:
@@ -518,7 +524,7 @@ class Gateway:
             elif result.status == "clarify":
                 completion_reaction = result.reaction
             question = (
-                self.questions.add(result, chat.id, thread, user.id)
+                self.questions.add(result, chat.id, thread, owner)
                 if result.pending and result.pending.options
                 else None
             )
@@ -543,7 +549,7 @@ class Gateway:
             for mid in sent:
                 if result.history:
                     result.history = trim_history(result.history)
-                self.sessions[(chat.id, mid)] = (time.monotonic(), user.id, thread, result)
+                self.sessions[(chat.id, mid)] = (time.monotonic(), owner, thread, result)
             while len(self.sessions) > 500:
                 self.sessions.pop(next(iter(self.sessions)))
 
