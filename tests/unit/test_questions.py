@@ -32,6 +32,20 @@ def test_numeric_buttons_bind_owner_message_and_consume_once():
         questions.choose(buttons[0].callback_data, -1, 55, 7, 456)
 
 
+def test_admin_can_answer_someone_elses_question_by_button_or_text():
+    questions = Questions(1800, admin_id=99)
+    entry = questions.add(result(["甲", "乙"]), -1, None, 7)
+    questions.bind(entry.token, 456)
+    with pytest.raises(ValueError, match="提問者"):
+        questions.choose(questions.markup(entry.token).inline_keyboard[0][0].callback_data, -1, None, 8, 456)
+    assert (
+        questions.choose(questions.markup(entry.token).inline_keyboard[0][1].callback_data, -1, None, 99, 456).text
+        == "乙"
+    )
+    typed = questions.add(result(["甲", "乙"]), -1, None, 7)
+    assert questions.answer_text(typed.result.pending, "14552158", -1, None, 99).text == "14552158"
+
+
 def test_confirmation_buttons_and_text_share_one_answer():
     questions = Questions(1800)
     entry = questions.add(result(["同意", "不同意"]), -1, None, 7)

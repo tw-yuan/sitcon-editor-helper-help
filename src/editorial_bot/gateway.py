@@ -69,7 +69,9 @@ class Gateway:
         self.reviews = reviews
         self.retry_at = 0.0
         self.sessions = {}
-        self.questions = Questions(getattr(settings, "context_ttl_seconds", 1800))
+        self.questions = Questions(
+            getattr(settings, "context_ttl_seconds", 1800), admin_id=getattr(settings, "telegram_admin_id", None)
+        )
         self.locks = {}
         self.semaphore = asyncio.Semaphore(settings.max_concurrent_agent_turns)
 
@@ -276,7 +278,7 @@ class Gateway:
         now = time.monotonic()
         self.sessions = {k: v for k, v in self.sessions.items() if now - v[0] < self.settings.context_ttl_seconds}
         entry = self.sessions.get((chat, message))
-        if entry and entry[1:3] == (user, thread):
+        if entry and entry[2] == thread and user in (entry[1], self.settings.telegram_admin_id):
             return entry[3]
         return None
 

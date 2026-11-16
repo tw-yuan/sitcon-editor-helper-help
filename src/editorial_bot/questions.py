@@ -29,9 +29,10 @@ class Choice:
 
 
 class Questions:
-    def __init__(self, ttl_seconds: int, *, clock=time.monotonic):
+    def __init__(self, ttl_seconds: int, *, clock=time.monotonic, admin_id: int | None = None):
         self.ttl = ttl_seconds
         self.clock = clock
+        self.admin_id = admin_id  # may answer anyone's question
         self.entries: dict[str, Question] = {}
 
     def add(self, result, chat_id, thread_id, user_id) -> Question:
@@ -64,8 +65,8 @@ class Questions:
     def _validate(self, entry, chat_id, thread_id, user_id, *, check_thread=True):
         if entry is None or self.clock() - entry.created_at >= self.ttl:
             raise ValueError("這個問題已過期，請重新提出需求。")
-        if entry.user_id != user_id:
-            raise ValueError("這個問題只能由原提問者回答。")
+        if user_id not in (entry.user_id, self.admin_id):
+            raise ValueError("這個問題只能由原提問者或管理員回答。")
         if entry.chat_id != chat_id or (check_thread and entry.thread_id != thread_id):
             raise ValueError("問題的群組或話題不符。")
         if entry.used:

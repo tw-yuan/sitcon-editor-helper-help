@@ -371,8 +371,12 @@ class Agent:
                     if isinstance(raw_options, list)
                     else []
                 )
+                # Text written alongside ask_user is for the user too; the model sometimes puts the whole
+                # question there and omits `question` (ask_user skips schema validation in _exec).
+                parts = [(resp.text or "").strip(), str(ask.arguments.get("question") or "").strip()]
+                question = "\n".join(dict.fromkeys(p for p in parts if p))
                 return _Outcome(
-                    reply=self._format_question({**ask.arguments, "options": options}),
+                    reply=self._format_question({"question": question, "options": options}),
                     pending=Pending(messages=messages, resolved_results=resolved, ask_user_id=ask.id, options=options),
                     tool_actions=actions,
                 )
@@ -415,7 +419,7 @@ class Agent:
 
     @staticmethod
     def _format_question(args: dict) -> str:
-        question = str(args.get("question", "請問你的意思是？"))
+        question = str(args.get("question") or "請問你的意思是？")
         options = args.get("options") or []
         lines = [question]
         lines += [f"選項 {i}：{opt}" for i, opt in enumerate(options, start=1)]

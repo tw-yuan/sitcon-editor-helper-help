@@ -29,6 +29,21 @@ async def test_ask_user_never_executes_sibling_mutation():
     assert len(result.pending.resolved_results) == 1
 
 
+async def test_ask_user_keeps_model_text_when_question_field_is_missing():
+    context = "已開好 #722–#725。#726 的 @michael9262 名冊查無此人。"
+    llm = SimpleNamespace(
+        chat=AsyncMock(
+            return_value=LLMResponse(
+                context, [ToolCall("ask", "ask_user", {"options": ["只指派嵩嵩"]})], Usage(0, 0), "tool_use", "t", None
+            )
+        )
+    )
+    agent = Agent(llm, ToolRegistry([]), SimpleNamespace(build=AsyncMock(return_value="policy")))
+    asked = await agent.handle(AgentRequest(-1, 55, 7, "writer", "小石開卡"))
+    assert asked.reply.startswith(context) and "請問你的意思是" not in asked.reply
+    assert "選項 1：只指派嵩嵩" in asked.reply
+
+
 async def test_question_options_survive_resume_and_plain_text_formatting():
     llm = SimpleNamespace(
         chat=AsyncMock(
