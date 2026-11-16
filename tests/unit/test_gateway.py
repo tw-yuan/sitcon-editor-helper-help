@@ -157,6 +157,27 @@ async def test_gateway_ignores_messages_outside_allowed_triggers(gateway, text, 
         assert await gateway.store.all("SELECT * FROM audit_log") == []
 
 
+@pytest.mark.parametrize("text,addressed", [("敲敲 @Misawai 幫忙review", False), ("小石 把這張改回 Doing", True)])
+async def test_bare_reply_the_model_ignores_gets_only_a_heart(gateway, text, addressed):
+    from editorial_bot.agent.core import AgentResult
+
+    await gateway.store.execute("INSERT INTO authorized_groups(chat_id,authorized_by) VALUES (-1,7)")
+    bot = feedback_bot()
+    gateway.agent.handle.return_value = AgentResult("")
+    incoming = update(text=text)
+    incoming.effective_message.reply_to_message = SimpleNamespace(
+        message_id=100, from_user=SimpleNamespace(id=99), text="728_宣傳 AMA.pdf", caption=None
+    )
+    await gateway.handle(incoming, SimpleNamespace(bot=bot))
+    assert gateway.agent.handle.call_args.args[0].addressed is addressed
+    bot.send_message.assert_not_awaited()
+    # Named requests keep 👀 and typing; a bare reply the model ignores only gets a heart as a sign of life.
+    emojis = [c.kwargs["reaction"][0].emoji for c in bot.set_message_reaction.call_args_list]
+    assert emojis == (["👀", "❤"] if addressed else ["❤"])
+    assert bool(bot.send_chat_action.await_count) is addressed
+    assert (await gateway.store.one("SELECT state FROM events"))["state"] == "queued"
+
+
 @pytest.mark.parametrize(
     "status,heart,expected",
     [
@@ -479,6 +500,8 @@ async def test_nonforum_text_reply_keeps_original_request_despite_reply_thread(g
     # Gateway trims/copies history before storing it; contents, not list identity, must survive.
     assert resumed.history == (history if mode == "history" else None)
     assert resumed.reply_context is None
+    # Answering a pending question is addressed to the bot; a bare follow-up reply may be ignored.
+    assert resumed.addressed is (mode != "history")
     assert resumed.thread_id is None
     assert bot.send_message.call_args.kwargs["message_thread_id"] is None
 

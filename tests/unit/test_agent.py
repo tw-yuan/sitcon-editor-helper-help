@@ -105,6 +105,15 @@ async def test_empty_response_without_completed_review_keeps_fallback():
     assert "請換個說法" in result.reply
 
 
+async def test_bare_reply_is_flagged_and_may_end_silently():
+    llm = SimpleNamespace(chat=AsyncMock(return_value=LLMResponse(" \n", [], Usage(0, 0), "stop", "test", None)))
+    agent = Agent(llm, ToolRegistry([]), SimpleNamespace(build=AsyncMock(return_value="policy")))
+    request = AgentRequest(-1, 55, 7, "writer", "敲敲 @Misawai 幫忙review", reply_context="728.pdf", addressed=False)
+    assert (await agent.handle(request)).reply == ""
+    sent = [block.text for block in llm.chat.call_args.kwargs["messages"][0].content]
+    assert any("沒有點名你" in text for text in sent[:-1]) and sent[-1] == request.text
+
+
 async def test_multiple_clarifications_keep_original_request_and_each_user_answer():
     captured = []
 

@@ -1,6 +1,7 @@
 """Telegram authorization, reply chains and durable outbound notifications."""
 
 import asyncio
+import contextlib
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from .agent.context import trim_history
 from .agent.core import AgentRequest, AgentResult
 from .agent.tools.base import ToolContext
 from .agent.tools.editorial import Empty
+from .agent.tools.reaction_tools import HEART
 from .feedback import REACT_DONE, progress, set_reaction
 from .logging_setup import redact
 from .questions import Questions
@@ -374,11 +376,8 @@ class Gateway:
                 return
         reply = message.reply_to_message
         reply_to_bot = bool(reply and reply.from_user and reply.from_user.id == context.bot.id)
-        if (
-            not command
-            and choice is None
-            and not triggered(text, bot_username, self.settings.bot_trigger_name, reply_to_bot)
-        ):
+        addressed = bool(command or choice) or triggered(text, bot_username, self.settings.bot_trigger_name, False)
+        if not addressed and not reply_to_bot:
             return
         if command in ("revoke", "reload", "resend") and not admin:
             await message.reply_text("這個指令限設定的管理員使用。")
@@ -427,8 +426,11 @@ class Gateway:
             return
         # Feedback starts while queued; callbacks have no new user message to react to.
         reaction_message_id = None if callback else message.message_id
+        # A bare reply to the bot is often aimed at other people: no 👀 or typing; silence ends with a heart below.
+        asked = None if addressed else self.conversation(chat.id, reply.message_id, user.id, thread)
+        quiet = not addressed and not (asked and asked.pending)
         async with (
-            progress(context.bot, chat.id, thread, reaction_message_id),
+            contextlib.nullcontext() if quiet else progress(context.bot, chat.id, thread, reaction_message_id),
             self.locks.setdefault((chat.id, thread, user.id), asyncio.Lock()),
             self.semaphore,
         ):
@@ -476,6 +478,7 @@ class Gateway:
                             resume=previous.pending if previous else None,
                             history=previous.history if previous and not previous.pending else None,
                             reply_context=(reply.text or reply.caption) if reply and not previous else None,
+                            addressed=not quiet,
                         )
                     )
             except Exception as exc:
@@ -534,6 +537,9 @@ class Gateway:
                 (chat.id, user.id, result.action, result.status, json.dumps(result.detail, ensure_ascii=False)),
             )
             sent = await self.deliver(context.bot, event=event)
+            if not messages and result.status == "ok" and reaction_message_id is not None:
+                # Nothing to say (e.g. a reply aimed at other people): a heart shows the bot saw it and is alive.
+                await set_reaction(context.bot, chat.id, reaction_message_id, result.reaction or HEART)
             for mid in sent:
                 if result.history:
                     result.history = trim_history(result.history)
